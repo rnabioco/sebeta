@@ -1,0 +1,108 @@
+---
+title: "Find markers"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+bibliography: "/Users/kriemo/Projects/russ/docs/bibliography.bib"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir <- "~/Projects/10x_data/runs/20180524_russ/results"
+tcols <- rev(brewer.pal(11, "RdGy")[c(1:5, 7)])[c(1,6)]
+
+bcells <- readRDS("sobj.rds")
+```
+
+# Find markers
+
+Compare T1D disease modeling to control cells per cluster and overall.
+
+
+```{r markers_overall}
+bcells <- SetAllIdent(bcells, "expt")
+per_expt_markers <- FindAllMarkers(bcells)
+```
+
+```{r markers_per_cluster_per_expt}
+# generate new label for cluster + expt
+new_dat <- data.frame(expt_cluster = str_c(bcells@meta.data$expt, "_",
+                                           bcells@meta.data$res.0.3),
+           row.names = rownames(bcells@meta.data))
+
+bcells <- AddMetaData(bcells, new_dat)
+
+bcells <- SetAllIdent(bcells, "expt_cluster")
+nclusters <- unique(bcells@meta.data$res.0.3)
+per_expt_per_cluster_markers <- map(nclusters,
+    ~FindMarkers(bcells, 
+                 ident.1 = str_c("Holger_T1D_modeling_", .x),
+                 ident.2 = str_c("Holger_CTRL_", .x)) %>% 
+      tibble::rownames_to_column("gene") %>% 
+      mutate(cluster = str_c("cluster ", .x, " T1D vs. CTRL")))
+
+per_expt_per_cluster_markers <- map(per_expt_per_cluster_markers,
+                                    ~filter(.x, p_val_adj < 0.01))
+```
+
+
+```{r}
+per_expt_markers <- per_expt_markers %>% 
+  filter(cluster == "Holger_T1D_modeling")
+
+names(per_expt_per_cluster_markers) <- map(per_expt_per_cluster_markers, 
+                                           ~.x[1, ] %>% pull(cluster))
+markers <- c(list(per_expt_markers), per_expt_per_cluster_markers)
+names(markers)[1] <- c("T1d_vs_CTRL_all_cells")
+markers <- map(markers, 
+               ~set_xlsx_class(.x,
+               "gene",
+               "text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between T1D modeling cells and control cells for each cluster. Also included is a comparsions between all T1D modeling cells and control cells.",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+
+openxlsx::write.xlsx(c(readme_sheet, markers), "T1D_markers.xlsx")
+```
+

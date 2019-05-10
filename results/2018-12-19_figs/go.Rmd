@@ -1,0 +1,75 @@
+---
+title: "GO-annotations"
+author: "Kent Riemondy RBI"
+date: "4/17/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Use gProfiler to get GO annotations
+```
+https://biit.cs.ut.ee/gprofiler/gost?organism=hsapiens&query=DLK1%0AIAPP%0ACD99%0ATMOD1%0AINS%0AHN1%0AMLLT11%0ARAP1B%0ASTMN2%0ALMO1%0Aegfp%0APCP4%0AFXYD6%0ANKAIN3%0ANPPC%0ATMSB10%0AGRIA4%0AMAP1B%0AH3F3A%0AIFI6%0ASTMN1%0AKIF5C%0ACADM1%0ALHFP%0ACFL1%0AERO1B%0AENTPD3%0ACKB%0ARPIA%0APAM%0ANR3C1%0ACALB2%0ASPINT2%0AHOPX%0AMAP1LC3A%0AKCNK16%0ADIXDC1%0APTMA%0AASB9%0ATBCB%0ACFC1%0ANDUFB9%0ACCBE1%0ABASP1%0AMEAF6%0ANDUFA5%0ATUBA1A%0ACHMP4B%0AMARCKSL1%0ATFAP2A%0ACD24%0AMALAT1%0ASTMN4%0ATIMP1%0ACHRNA5%0ADCX%0APCDH7%0AHPCA%0ACCNI%0ASTARD3NL%0APGRMC1%0ANTM%0ADRAIC%0APDX1%0ARTN1%0ATPD52%0ACOPE%0AELAVL2%0ARPN2%0APRSS23%0AYBX1%0ATUBB2B%0ACDC42%0ANEFM%0ATAGLN3%0APLPPR5%0APPIB%0AEDARADD%0ANDUFC2%0ASORD%0APFN2%0APERP%0ASRP9%0AKCNK17%0ABEX4%0AISL1%0AAPLP1%0AGREM2%0ADCTN3%0AMEG3%0AACTB%0AXBP1%0ARTN4%0AMDK%0AFAM105A%0APAFAH1B3%0APLXNA2%0AST6GALNAC5%0ATCEAL7%0APTS%0APAPPA2%0ASPCS2%0ATXN%0AMAFB%0ASCG3%0APIPOX%0ASARAF%0ADAD1%0APKM%0ATMEM59L%0ADNAJC12%0ATUNAR%0ATMEM242%0AARF5%0ARGS9%0ALMO2%0ATMEM196%0AARL4C%0AGHRH%0ARP5-1185K9.1%0ATMX4%0ABAALC%0ASCG5%0AICA1%0ATMSB4X&ordered=true&all_results=false&no_iea=false&combined=false&measure_underrepresentation=false&domain_scope=annotated&significance_threshold_method=g_SCS&user_threshold=0.05&numeric_namespace=ENTREZGENE_ACC&sources=GO:MF,GO:CC,GO:BP,KEGG,TF,REAC,MIRNA,HPA,CORUM,HP,WP&background=
+```
+
+```{r}
+
+source("../../R/globals.R")
+library(tidyverse)
+library(cowplot)
+```
+
+
+
+```{r}
+gprofiler_res <- read_csv("gprof/gProfiler_sorted_endpoint_markers.csv")
+
+plt_dat <- group_by(gprofiler_res, source) %>% 
+  arrange(adjusted_p_value, .by_group = T) %>% 
+  dplyr::slice(1:5) %>% 
+  mutate(n = n()) %>% 
+  ungroup() %>% 
+  arrange(desc(n))
+
+rename_go <- c(
+  "GO:MF"= "Molecular Function",
+  "GO:CC"= "Cellular Component",
+  "GO:BP" = "Biological Process",
+  "KEGG" = "KEGG",
+  "REAC" = "REACTOME"
+)
+
+plt_dat <- filter(plt_dat, source %in% names(rename_go))
+plt_dat <- mutate(plt_dat, 
+                  term_name_short = ifelse(str_count(term_name, " ") >= 6,
+                                           word(term_name, 1, 6),
+                                           term_name),
+                  source = rename_go[source])
+
+plt_dat$term_name_short <- factor(plt_dat$term_name_short, 
+                                  levels = rev(plt_dat$term_name_short))
+
+facet_order <- plt_dat  %>% 
+  select(source, n) %>% 
+  unique() %>% 
+  pull(source) %>% 
+  factor(., levels = .)
+plt_dat$source <- factor(plt_dat$source, facet_order)
+
+p <- ggplot(plt_dat, aes(term_name_short, negative_log10_of_adjusted_p_value)) +
+  geom_col(aes(fill = source), color = "black") +
+  coord_flip() +
+  scale_fill_brewer(palette = "Greys", name = "", direction = -1) + 
+  labs(x = "",
+       y = "-log10(adjusted pvalue)") + 
+  theme_cowplot() 
+
+
+
+save_plot("Go_term_enrichment.pdf", p, 
+          base_asp = 2, base_height = 4)
+```
+
+```

@@ -1,0 +1,620 @@
+---
+title: "various figs"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+bibliography: "/Users/kriemo/Projects/russ/docs/bibliography.bib"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir <- "~/Projects/10x_data/runs/20180524_russ/results"
+tcols <- rev(brewer.pal(11, "RdGy")[c(1:5, 7)])[c(1,6)]
+
+bcells <- readRDS(file.path(project_dir, 
+                            "results",
+                             "2018-08-29_velocity", 
+                             "pt_sobj.rds"))
+```
+
+# Goal
+
+Generate figures for Holger's talk. 
+
+1) tSNE overall
+2) tSNE + cluster ids
+3) tSNE + markers (top 10 per cluster)
+4) tSNE + cell types ids (Work in progress)
+5) tSNE with pseudotime
+6) tSNE with velocity vectors
+7) tSNE with start and end points of velocity projections
+
+## tSNE overall
+
+First I will generate a series of generic tSNE plots. These are located in the `general_tsnes` directory. 
+
+- by experiment
+- by egfp 
+- one color 
+
+```{r}
+dir.create("general_tsnes", showWarnings = F)
+
+brewer_palette <- "Paired"
+bcells <- SetAllIdent(bcells, "expt")
+p <- TSNEPlot(bcells, pt.size = 0.25,
+              do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("general_tsnes/by_expt.pdf", p,
+          base_aspect_ratio = 1)
+
+bcells <- SetAllIdent(bcells, "orig.ident")
+p <- TSNEPlot(bcells, pt.size = 0.25,
+              do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("general_tsnes/one_color.pdf", p,
+          base_aspect_ratio = 1)
+
+bcells <- SetAllIdent(bcells, "orig.ident")
+p <- plot_feature(bcells, gene = "egfp", 
+                  pt.alpha = 1) 
+p
+save_plot("general_tsnes/egfp.pdf", p,
+          base_aspect_ratio = 1.2)
+```
+
+## tSNE with clustering info
+
+Next I will generate a series of tSNE plots containing information about the clustering. These are located in the `clustering_tsnes` directory. 
+
+- color by cluster id
+- color and label by cluster id 
+
+```{r}
+dir.create("clustering_tsnes", showWarnings = F)
+
+brewer_palette <- "Paired"
+bcells <- SetAllIdent(bcells, "res.0.3")
+p <- TSNEPlot(bcells, pt.size = 0.25,
+               do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("clustering_tsnes/color_by_cluster.pdf", p,
+          base_aspect_ratio = 1)
+
+p <- TSNEPlot(bcells, pt.size = 0.25, 
+              do.label = T, 
+              label.size = 5,
+              do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("clustering_tsnes/color_and_label_by_cluster.pdf", p,
+          base_aspect_ratio = 1)
+
+```
+
+## specific markers overlayed on tSNEs
+
+These are located in the `other_tsnes` directory. 
+
+
+```{r}
+dir.create("other_tsnes", showWarnings = F)
+
+genes <- c("CD9", "ST8SIA1", "CFAP126")
+walk(genes, 
+    function(x) {
+      plt <- plot_feature(bcells, gene = x, pt.alpha = 1)
+      save_plot(file.path("other_tsnes",
+                          paste0(x, ".pdf")),
+                plt)})
+               
+
+```
+
+## tSNEs colored by markers of each cluster
+
+Next I will generate a very large number of tSNE plots that are each colored by the expression of marker genes of each cluster. The log(normalized expression) is displayed on the plots, and the scale for each gene is set to the maximum expression in the dataset. These are located in the `marker_tsnes` directory.  
+
+I will plot out the top 20 markers of each cluster. The markers are defined by comparing the gene expression of a cluster to the gene expression of all other cells in the dataset. There will therefore be some markers that are shared between clusters. We can do future work to more precisvely define which clusters to compare to find marker genes. Note also that this analysis doesn't distinguish between the T1D modeling and control cells, which is defensible because there are not large differences between these cells. 
+
+```{r marker_tsnes}
+dir.create("marker_tsnes", showWarnings = F)
+dir.create(file.path("marker_tsnes", "cluster_summaries"), showWarnings = F)
+dir.create(file.path("marker_tsnes", "individual_genes"), showWarnings = F)      
+           
+markers <- suppressMessages(read_tsv(file.path(
+  project_dir,
+  "results",
+  "2018-05-30",
+  "res0.3_markers.txt")))
+
+top_n_markers <- group_by(markers, cluster) %>% 
+  arrange(p_val_adj, desc(avg_logFC), .by_group = T) %>% 
+  dplyr::slice(1:20) 
+
+top_n_markers_list <- split(top_n_markers, top_n_markers$cluster) %>% 
+  map(., ~dplyr::pull(.x, gene))
+
+imap(top_n_markers_list,
+     function(x, y){
+       plts <- map(x,
+                   function(gene_to_plot){
+                     p <- plot_feature(bcells, gene = gene_to_plot, 
+                                       pt.alpha = 1)
+                     save_plot(file.path("marker_tsnes",
+                                         "individual_genes",
+                                         paste0(gene_to_plot, "_cluster_", y,
+                                                ".pdf")),
+                               p,
+                               base_aspect_ratio = 1.2)
+                     p
+                   })
+       plt <- plot_grid(plotlist = plts,
+                        nrow = 4,
+                        ncol = 5)
+       save_plot(file.path("marker_tsnes",
+                           "cluster_summaries",
+                           paste0("cluster_", y, "_topn_plots.pdf")),
+                 plt,
+                 nrow = 4,
+                 ncol = 5,
+                 base_aspect_ratio = 1.2)
+     })
+
+
+```
+
+
+
+## tSNEs with clusters labeled by possible cell types
+
+I haven't had much success directly using gene sets from other single cell papers to classify cells. I've generated a series of tSNES from the top 20 markers defined for each cell type form the Murano et al and Segerstolpe et al. papers. 
+
+I have a rudimentary cell type definition, but will need help to try
+to define these clusters more clearly.
+
+cluster number | cell type |
+--------- | -------- | -------
+Cluster 0 | beta_like | INS+
+Cluster 7 | beta_like | INS+
+Cluster 9 | delta_like | SST+, HHEX+
+Clusters 4,5,2 | alpha-gamma-pp-like | GHRL+ GCG+ PPY(a litte)
+Clusters 1, 3,6,8 | fibroblast/endothelial? | COL5A2+ HIF1A+ NEUROD4
+
+
+
+```{r marker_tsne2}
+dir.create("classify_clusters", showWarnings = F) 
+dir.create(file.path("classify_clusters", "cluster_summaries"), showWarnings = F) 
+
+control_markers <- c(
+  "GCG", # alpha cells glucagon
+  "IAPP", # beta cells amylin,
+  "SST", # delta cells Somatostatin
+  "PPY", # PP cells  (gamma cells or F cells) pancreatic polypeptide
+  "GHRL" # Epsilon cells
+)
+
+cell_ids <- c(
+  "Beta-Cell-Like (INS+, IAPP+)" = "0",
+  "Beta-Cell-Like (INS+, IAPP+)" = "7",
+  "Delta-Cell-Like (SST+, HHEX+)" = "9"
+)
+
+# muraro data
+url <- "https://www.cell.com/cms/10.1016/j.cels.2016.09.002/attachment/ddfaa172-dc06-4228-b93e-b385300c5cfe/mmc3.xlsx"
+table_s3 <- file.path(docs_dir, "extdata", "mmc3.xlsx")
+
+get_file(url, table_s3)
+sheets <- readxl::excel_sheets(table_s3)
+sup_dat <- map(sheets, ~readxl::read_excel(table_s3, sheet = .x))
+names(sup_dat) <- sheets
+sup_dat <- map(sup_dat, ~dplyr::slice(.x, 1:20) %>% pull(X__1))
+
+
+dir.create(file.path("classify_clusters", "cluster_summaries", "murano_et_al"), showWarnings = F) 
+imap(sup_dat,
+     function(x, y){
+       plts <- map(x,
+                   function(gene_to_plot){
+                     p <- plot_feature(bcells, gene = gene_to_plot, 
+                                       pt.alpha = 1)
+                     p
+                   })
+       plt <- plot_grid(plotlist = plts,
+                        nrow = 4,
+                        ncol = 5)
+       save_plot(file.path("classify_clusters",
+                           "cluster_summaries",
+                           "murano_et_al",
+                           paste0(y, "_topn_plots.pdf")),
+                 plt,
+                 nrow = 4,
+                 ncol = 5,
+                 base_aspect_ratio = 1.2)
+     })
+```
+
+Next, I'll make plots from the Segerstolpe et al. paper. 
+
+```{r}
+url <- "https://www.cell.com/cms/10.1016/j.cmet.2016.08.020/attachment/6a140600-6b84-46f7-abc4-65058fb9e587/mmc3.xlsx"
+table_s2 <- file.path(docs_dir, "extdata", "mmc3_sandberg.xlsx")
+
+get_file(url, table_s2)
+sheets <- readxl::excel_sheets(table_s2)
+sup_dat <- map(sheets, ~readxl::read_excel(table_s2, sheet = .x))
+names(sup_dat) <- sheets
+
+dat <- sup_dat$`cell type specific`
+dat <- dat[, c(2, 4, 6, 8, 10, 12)]
+colnames(dat) <- dat[2, ]
+dat <- dat[-1, ]
+dat <- dat[-1, ]
+dat <- dat[-1, ]
+dat <- dat %>% 
+  gather(cluster, gene) %>% 
+  na.omit() %>% 
+  mutate(gene = str_replace_all(gene, "'", "")) 
+
+out <- map(split(dat, dat$cluster),
+    function(x){
+      df <- data_frame(x$gene[1:20])
+      colnames(df) <- unique(x$cluster)
+      df})
+
+names(out) <- c("acinar", 
+                   "ductal",
+                   "alpha",
+                   "beta",
+                   "gamma",
+                   "delta")
+
+out <- map(out, ~.x[, 1, drop = T])
+
+dir.create(file.path("classify_clusters", "cluster_summaries", "segerstolpe_et_al"), showWarnings = F) 
+imap(out,
+     function(x, y){
+       plts <- map(x,
+                   function(gene_to_plot){
+                     p <- plot_feature(bcells, gene = gene_to_plot, 
+                                       pt.alpha = 1)
+                     p
+                   })
+       plt <- plot_grid(plotlist = plts,
+                        nrow = 4,
+                        ncol = 5)
+       save_plot(file.path("classify_clusters",
+                           "cluster_summaries",
+                           "segerstolpe_et_al",
+                           paste0(y, "_topn_plots.pdf")),
+                 plt,
+                 nrow = 4,
+                 ncol = 5,
+                 base_aspect_ratio = 1.2)
+     })
+```
+
+
+## TSNE with pseudotime
+
+I've run Monocle2 to try to define a development trajectory. The `pseudotime/pseudotime.pdf` shows the each cell colored by it's cluster id. There are three main branches. One branch that has the INS+ beta cells (clusters 0 and 7), another branch that has the alpha-epsilon-ppy clusters (cluster 4, 2, 5) and a final branch with clusters 1 and 3. 
+
+The tSNE `pseudotime/pseudotime_on_tsne.pdf` overlays the calculated pseudotime values onto the tSNE
+
+```{r}
+library(monocle)
+atm <- readRDS("../2018-08-29_velocity/pt.rds")
+dir.create("pseudotime", showWarnings = F)
+
+p <- plot_cell_trajectory(atm, color_by = "res.0.3", cell_size = 0.5) +
+    scale_colour_brewer(palette = "Paired")
+save_plot("pseudotime/pseudotime.pdf", p)
+
+p <- plot_feature(bcells, gene = "Pseudotime", 
+                  pt.alpha = 1, meta_data_col = T)
+save_plot("pseudotime/pseudotime_on_tsne.pdf", p, base_aspect_ratio = 1.2)
+
+```
+
+## TSNE with velocity
+
+Lastly I've run the RNA velocity algorithms to try to infer the developmental trajectories using the ratio of unspliced to spliced read counts. The ides is that in a continuous differntiation system, if a cell begins to upregulates an mRNA, that cell will have a higher ratio of unspliced to spliced mRNA, than a cell that expresses the mRNA at a steady state. 
+
+The folder `velocity` contains three plots. 1 plot shows the project velocities as arrows. The second plot show the inferred starting points of the developmental trajectory. The final plot shows the end points. 
+
+
+## Compare to other datasets
+
+```{r dl_data, eval = F}
+dir.create(file.path(project_dir, "docs", "extdata"))
+dl_dir <- file.path(project_dir, "docs", "extdata")
+```
+
+
+http://dx.doi.org/10.1016/j.cmet.2016.08.018
+```{r xin_2016, eval = F}
+dl_url <- "https://scrnaseq-public-datasets.s3.amazonaws.com/scater-objects/xin.rds"
+fn <- file.path(dl_dir, "xin.rds")
+if(!file.exists(fn)){
+  download.file(dl_url, fn)
+}
+
+xin <- readRDS(fn)
+```
+
+http://dx.doi.org/10.1016/j.cmet.2016.08.020
+
+```{r seger_2016, eval = F}
+dl_url <- "https://scrnaseq-public-datasets.s3.amazonaws.com/scater-objects/segerstolpe.rds"
+fn <- file.path(dl_dir, "segerstolpe.rds")
+if(!file.exists(fn)){
+  download.file(dl_url, fn)
+}
+
+segerstolpe <- readRDS(fn)
+```
+
+
+http://dx.doi.org/10.1016/j.cels.2016.09.002
+```{r muraro_2016, eval = F}
+dl_url <- "https://scrnaseq-public-datasets.s3.amazonaws.com/scater-objects/muraro.rds"
+fn <- file.path(dl_dir, "muraro.rds")
+if(!file.exists(fn)){
+  download.file(dl_url, fn)
+}
+
+muraro <- readRDS(fn)
+```
+
+http://dx.doi.org/10.1016/j.cels.2016.08.011
+```{r baron_2016, eval = F}
+dl_url <- "https://scrnaseq-public-datasets.s3.amazonaws.com/scater-objects/baron-human.rds"
+fn <- file.path(dl_dir, "baron.rds")
+if(!file.exists(fn)){
+  download.file(dl_url, fn)
+}
+
+baron <- readRDS(fn)
+```
+
+```{r select_features, eval = F}
+library(scmap)
+
+sces <- lst(xin, segerstolpe, muraro, baron)
+sces <- map(sces, ~selectFeatures(.x, suppress_plot = FALSE))
+sces <- map(sces, ~indexCluster(.x))
+
+bcells@meta.data$cell_type1 <- bcells@meta.data$res.0.3
+sce <- as.SingleCellExperiment(bcells)
+rowData(sce)$feature_symbol <- rowData(sce)$gene
+assays(sce)$counts <- as.matrix(assays(sce)$counts)
+assays(sce)$logcounts <- as.matrix(assays(sce)$logcounts)
+
+scmapCluster_results <- scmapCluster(
+  projection = sce, 
+  index_list = map(sces, ~metadata(.x)$scmap_cluster_index)
+)
+
+
+set.seed(1)
+sce <- selectFeatures(sce, suppress_plot = FALSE)
+sces <- map(sces, ~indexCell(.x))
+
+scmapCell_results <- scmapCell(
+  sce, 
+  index_list = map(sces, ~metadata(.x)$scmap_cell_index)
+)
+
+scmapCell_clusters <- scmapCell2Cluster(
+  scmapCell_results, 
+  map(sces, ~as.character(colData(.x)$cell_type1))
+)
+
+plot(
+  getSankey(
+    colData(sce)$cell_type1, 
+    scmapCell_clusters$scmap_cluster_labs[,"yan"],
+    plot_height = 400
+  )
+)
+saveRDS(sce, "bcells_sce.rds")
+```
+
+
+
+## Recluster mature-like beta-cells
+
+```{r}
+
+beta_cells_manual <- read_tsv("beta_cells.tsv")
+mbcells <- SubsetData(bcells, 
+                      cells.use = beta_cells_manual$beta_cells_manual)
+
+mbcells <- ScaleData(mbcells)
+mbcells <- FindVariableGenes(mbcells, 
+                    mean.function = ExpMean, 
+                    dispersion.function = LogVMR, 
+                    x.low.cutoff = 0.1, 
+                    x.high.cutoff = 5, 
+                    y.cutoff = 0.4, do.contour = F, do.plot = T)
+
+mbcells <- RunPCA(mbcells, 
+               pc.genes = mbcells@var.genes, 
+               do.print = FALSE, 
+               pcs.print = 1:5, 
+               genes.print = 5,
+               seed.use = 20180530)
+
+mbcells <- FindClusters(mbcells, 
+                     reduction.type = "pca", 
+                     dims.use = 1:17,
+                     k.param = 40, 
+                     resolution = 0.3, 
+                     print.output = 0, 
+                     plot.SNN = F,
+                     save.SNN = T, 
+                     random.seed = 0, force.recalc = T)
+
+mbcells_markers <- FindAllMarkers(mbcells, 
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+  
+write_tsv(mbcells_markers, "mature_bcell_markers.txt")
+
+```
+
+```{r}
+markers <- read_tsv("mature_bcell_markers.txt")
+
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each mature beta cell cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers_per_betacell_cluster.xlsx")
+```
+
+```{r marker_tsnes}
+dir.create("mature_betacell_marker_tsnes", showWarnings = F)
+dir.create(file.path("mature_betacell_marker_tsnes", 
+                     "cluster_summaries"), showWarnings = F)
+dir.create(file.path("mature_betacell_marker_tsnes", 
+                     "individual_genes"), showWarnings = F)      
+           
+markers <- suppressMessages(read_tsv("mature_bcell_markers.txt"))
+
+top_n_markers <- group_by(markers, cluster) %>% 
+  arrange(p_val_adj, desc(avg_logFC), .by_group = T) %>% 
+  dplyr::slice(1:20) 
+
+top_n_markers_list <- split(top_n_markers, top_n_markers$cluster) %>% 
+  map(., ~dplyr::pull(.x, gene))
+
+imap(top_n_markers_list,
+     function(x, y){
+       plts <- map(x,
+                   function(gene_to_plot){
+                     p <- plot_feature(mbcells, gene = gene_to_plot, 
+                                       pt.alpha = 1,
+                                       pt.size = 0.1)
+                     save_plot(file.path("mature_betacell_marker_tsnes",
+                                         "individual_genes",
+                                         paste0(gene_to_plot, "_cluster_", y,
+                                                ".pdf")),
+                               p,
+                               base_aspect_ratio = 1.2)
+                     p
+                   })
+       plt <- plot_grid(plotlist = plts,
+                        nrow = 4,
+                        ncol = 5)
+       save_plot(file.path("mature_betacell_marker_tsnes",
+                           "cluster_summaries",
+                           paste0("cluster_", y, "_topn_plots.pdf")),
+                 plt,
+                 nrow = 4,
+                 ncol = 5,
+                 base_aspect_ratio = 1.2)
+     })
+
+brewer_palette <- "Paired"
+bcells <- SetAllIdent(mbcells, "res.0.3")
+p <- TSNEPlot(bcells, pt.size = 0.1,
+               do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("mature_betacell_marker_tsnes/color_by_cluster.pdf", p,
+          base_aspect_ratio = 1)
+
+p <- TSNEPlot(mbcells, pt.size = 0.25, 
+              do.label = T, 
+              label.size = 5,
+              do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("mature_betacell_marker_tsnes/color_and_label_by_cluster.pdf", p,
+          base_aspect_ratio = 1)
+
+```
+
+## Cell distribution per cluster
+
+```{r}
+
+cluster_ids <- bcells@meta.data$res.0.3
+cell_ids <- bcells@cell.names
+expt <- bcells@meta.data$expt
+
+cluster_summary <- data_frame(id = cell_ids, expt = expt, cluster = cluster_ids)
+cluster_summary <- group_by(cluster_summary, expt, cluster) %>%
+  summarize(cells = n()) %>% 
+  filter(expt == "Holger_CTRL")
+
+plt <- ggplot(cluster_summary, aes(cluster, cells)) +
+  ylab("Number of Cells") +
+  scale_fill_brewer(palette = "Paired") +
+  geom_bar(stat = "identity", 
+           aes(fill = expt), position = "dodge") +
+  theme(legend.position = "none")
+
+save_plot("cells_per_cluster.pdf", plt)
+
+```

@@ -1,0 +1,485 @@
+---
+title: "Holger Russ scRNA-Seq analysis expt1 vs 2."
+author: "Kent Riemondy RBI"
+date: "`R Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir_expt1 <- "~/Projects/10x_data/runs/20180524_russ/results"
+data_dir_expt2 <- "~/Projects/10x_data/runs/20180918_russ/results"
+tcols <- rev(brewer.pal(11, "RdGy")[c(1:5, 7)])[1:6]
+```
+
+## Experiment Summary
+
+Sample | Description
+------------- | ---------------- 
+Russ_GFP_Sort | 2nd experiment
+Russ_d36GFP_Reagg | 2nd experiment
+
+```{r get_data}
+
+samples_expt1 <- c(
+  "Holger_CTRL")
+
+sample_paths_1 <- file.path(data_dir_expt1,
+                          samples_expt1,
+                          "outs",
+                          "filtered_gene_bc_matrices",
+                          "GRCh38_transgenes")
+
+names(sample_paths_1) <- samples_expt1
+
+samples_expt2 <- c(
+  "Russ_d36GFP_Reagg")
+
+sample_paths_2 <- file.path(data_dir_expt2,
+                          samples_expt2,
+                          "outs", 
+                          "filtered_gene_bc_matrices", 
+                          "GRCh38_transgenes")
+
+names(sample_paths_2) <- samples_expt2
+
+sample_paths <- c(sample_paths_1, sample_paths_2)
+bcells <- map(sample_paths, Seurat::Read10X)
+```
+
+```{r create_seurat, message = F, results = 'hide', warning = F}
+bcells <- map(bcells, ~CreateSeuratObject(raw.data = .x, 
+                              min.cells = 5,
+                              min.genes = 250, 
+                              project = "Russ",
+                              names.field = c(1,2), 
+                              names.delim = "_"))
+```
+
+```{r additional_mdata}
+
+# add correct sample identifier
+ids <- imap(bcells, ~data.frame(row.names = rownames(.x@meta.data), 
+                                expt = rep(.y, nrow(.x@meta.data))))
+bcells <- map2(bcells, ids, function(x, y) AddMetaData(x, y, "expt"))
+```
+
+
+## Mitochondrial Reads 
+
+
+```{r QC}
+mito.genes <- map(bcells, ~grep("^MT-", rownames(.x@data), value = T))
+proportion.mito <- map2(bcells, mito.genes, ~Matrix::colSums(.x@data[.y, ]) /
+  Matrix::colSums(.x@data))
+
+bcells <- map2(bcells, proportion.mito, 
+               ~AddMetaData(.x, .y, "proportion.mito"))
+```
+
+
+```{r, apply_filters}
+bcells <- map(bcells, ~FilterCells(.x, 
+                       subset.names = c("nUMI", "proportion.mito"), 
+                       low.thresholds = c(250, -Inf), 
+                       high.thresholds = c(75000, 0.20)))
+
+bcells <- map(bcells, NormalizeData)
+bcells <- map(bcells, ScaleData, display.progress = F)
+
+bcells <- map(bcells, ~FindVariableGenes(.x, do.plot = F))
+
+vargenes <- map(bcells, 
+                ~head(rownames(.x@hvg.info), 2000))
+
+genes.use <- Reduce(function(x, y) intersect(x, y), vargenes)
+```
+
+## CCA
+
+```{r cca}
+bcell <- RunCCA(bcells[[1]], bcells[[2]],
+                genes.use = genes.use, 
+                add.cell.id1 = names(bcells)[1], 
+                add.cell.id2 = names(bcells)[2], 
+                num.cc = 30)
+bcell <- AlignSubspace(bcell, reduction.type = "cca", grouping.var = "expt", 
+    dims.align = 1:21)
+bcell <- RunTSNE(bcell, reduction.use = "cca.aligned", dims.use = 1:20, 
+    do.fast = T)
+
+
+TSNEPlot(bcell, do.return = T, 
+               pt.size = 0.5, group.by = "expt", 
+         colors.use = viridis(4))
+
+FeaturePlot(bcell, c("INS", "egfp"), do.return = T)
+
+bcell <- FindClusters(bcell, 
+                     reduction.type = "cca.aligned", 
+                     dims.use = 1:21,
+                     k.param = 40, 
+                     resolution = 0.5, 
+                     print.output = 0, 
+                     plot.SNN = F,
+                     save.SNN = T, 
+                     random.seed = 0)
+
+saveRDS(bcell, "sobj_cca.rds")
+rm(bcell)
+gc()
+```
+
+```{r}
+bcells <- readRDS("sobj_cca.rds")
+
+bcells <- SetAllIdent(bcells, "res.0.5")
+if (!file.exists("ctrl_markers.txt")){
+  bcells_markers <- FindAllMarkers(bcells,
+                                   only.pos = TRUE,
+                                   min.pct = 0.25,
+                                   logfc.threshold = 0.5)
+
+  write_tsv(bcells_markers, "ctrl_markers.txt")
+} else {
+  bcells_markers <- read_tsv("ctrl_markers.txt")
+}
+
+# also up and down
+bcells_markers <- FindAllMarkers(bcells,
+                                   only.pos = FALSE,
+                                   min.pct = 0.25,
+                                   logfc.threshold = 0.25)
+
+write_tsv(bcells_markers, "ctrl_markers_updown.txt")
+  
+```
+
+
+```{r}
+# compare between conditions within each cluster
+samples <- unique(bcells@meta.data$expt)
+clusters <- unique(bcells@meta.data$res.0.5)
+
+bcells@meta.data$per_condition_ids <- paste0(bcells@meta.data$expt,
+                                             "_cluster_",
+                                             bcells@meta.data$res.0.5)
+bcells <- SetAllIdent(bcells, "per_condition_ids")
+dir.create("markers_between_conditions")
+markers <- map_dfr(clusters,
+     function(cluster){
+       id1 = paste0(samples[1], "_cluster_", cluster)
+       id2 = paste0(samples[2], "_cluster_", cluster)
+       id1_counts <- sum(bcells@meta.data$per_condition_ids == id1)
+       id2_counts <- sum(bcells@meta.data$per_condition_ids == id2)
+       res <- FindMarkers(bcells, 
+                  ident.1 = id1,
+                  ident.2 = id2,
+                  min.pct = 0.25,
+                  logfc.threshold = 0.25)
+       res <- tibble::rownames_to_column(res, "gene")
+       res$cluster <- cluster
+       res
+     })
+
+
+```
+
+### xcel spreadsheets
+
+```{r all_markers}
+
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each sample per cluster",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  paste0("p-value from wilcox test of indicated cluster of ", samples[1], " vs ", samples[2]),
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "ctrl_markers_between_conditions_per_cluster.xlsx")
+```
+
+```{r all_markers}
+markers <- read_tsv("ctrl_markers.txt")
+
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each sample and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "ctrl_markers_per_cluster.xlsx")
+```
+
+```{r all_markers}
+markers <- read_tsv("ctrl_markers_updown.txt") %>% 
+  filter(p_val_adj < 0.05)
+
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each sample and all other cells (p_val_adj < 0.05, logFC of at least 0.25 and expressed in at least 25% of cells in any comparison",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "ctrl_markers_per_cluster_up_and_down.xlsx")
+```
+## make tsnes
+
+```{r}
+dir.create("general_tsnes", showWarnings = F)
+
+brewer_palette <- "Paired"
+bcells <- SetAllIdent(bcells, "expt")
+p <- TSNEPlot(bcells, pt.size = 0.25,
+              do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("general_tsnes/by_expt.pdf", p,
+          base_aspect_ratio = 1, base_height = 6)
+
+bcells <- SetAllIdent(bcells, "orig.ident")
+p <- TSNEPlot(bcells, pt.size = 0.25,
+              do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("general_tsnes/one_color.pdf", p,
+          base_aspect_ratio = 1)
+
+bcells <- SetAllIdent(bcells, "orig.ident")
+p <- plot_feature(bcells, gene = "egfp", 
+                  pt.alpha = 1) 
+p
+save_plot("general_tsnes/egfp.pdf", p,
+          base_aspect_ratio = 1.2)
+```
+
+## tSNE with clustering info
+
+Next I will generate a series of tSNE plots containing information about the clustering. These are located in the `clustering_tsnes` directory. 
+
+- color by cluster id
+- color and label by cluster id 
+
+```{r}
+dir.create("clustering_tsnes", showWarnings = F)
+
+brewer_palette <- "Paired"
+bcells <- SetAllIdent(bcells, "res.0.5")
+p <- TSNEPlot(bcells, pt.size = 0.25,
+               do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("clustering_tsnes/color_by_cluster.pdf", p,
+          base_aspect_ratio = 1)
+
+p <- TSNEPlot(bcells, pt.size = 0.25, 
+              do.label = T, 
+              label.size = 5,
+              do.return = T) +
+  scale_color_brewer(palette = brewer_palette) +
+  theme(legend.position = "top")
+p
+save_plot("clustering_tsnes/color_and_label_by_cluster.pdf", p,
+          base_aspect_ratio = 1)
+
+```
+
+## specific markers overlayed on tSNEs
+
+These are located in the `other_tsnes` directory. 
+
+```{r}
+dir.create("other_tsnes", showWarnings = F)
+
+genes <- c("CD9", "ST8SIA1", "CFAP126")
+walk(genes, 
+    function(x) {
+      plt <- plot_feature(bcells, gene = x, pt.alpha = 1)
+      save_plot(file.path("other_tsnes",
+                          paste0(x, ".pdf")),
+                plt)})
+               
+
+```
+
+## tSNEs colored by markers of each cluster
+
+Next I will generate a very large number of tSNE plots that are each colored by the expression of marker genes of each cluster. The log(normalized expression) is displayed on the plots, and the scale for each gene is set to the maximum expression in the dataset. These are located in the `marker_tsnes` directory.  
+
+I will plot out the top 20 markers of each cluster. The markers are defined by comparing the gene expression of a cluster to the gene expression of all other cells in the dataset. There will therefore be some markers that are shared between clusters. We can do future work to more precisvely define which clusters to compare to find marker genes. Note also that this analysis doesn't distinguish between the T1D modeling and control cells, which is defensible because there are not large differences between these cells. 
+
+```{r marker_tsnes}
+dir.create("marker_tsnes", showWarnings = F)
+dir.create(file.path("marker_tsnes", "cluster_summaries"), showWarnings = F)
+dir.create(file.path("marker_tsnes", "individual_genes"), showWarnings = F)      
+           
+markers <- suppressMessages(read_tsv("ctrl_markers.txt"))
+
+top_n_markers <- group_by(markers, cluster) %>% 
+  arrange(p_val_adj, desc(avg_logFC), .by_group = T) %>% 
+  dplyr::slice(1:20) 
+
+top_n_markers_list <- split(top_n_markers, top_n_markers$cluster) %>% 
+  map(., ~dplyr::pull(.x, gene))
+
+imap(top_n_markers_list,
+     function(x, y){
+       plts <- map(x,
+                   function(gene_to_plot){
+                     p <- plot_feature(bcells, gene = gene_to_plot, 
+                                       pt.alpha = 1)
+                     save_plot(file.path("marker_tsnes",
+                                         "individual_genes",
+                                         paste0(gene_to_plot, "_cluster_", y,
+                                                ".pdf")),
+                               p,
+                               base_aspect_ratio = 1.2)
+                     p
+                   })
+       plt <- plot_grid(plotlist = plts,
+                        nrow = 4,
+                        ncol = 5)
+       save_plot(file.path("marker_tsnes",
+                           "cluster_summaries",
+                           paste0("cluster_", y, "_topn_plots.pdf")),
+                 plt,
+                 nrow = 4,
+                 ncol = 5,
+                 base_aspect_ratio = 1.2)
+     })
+
+
+```
+
+
+
+```{r cell_counts}
+
+cluster_ids <- bcells@meta.data$res.0.5
+cell_ids <- bcells@cell.names
+expt <- bcells@meta.data$expt
+
+cluster_summary <- data_frame(id = cell_ids, expt = expt, cluster = cluster_ids)
+cluster_summary <- group_by(cluster_summary, expt) %>% 
+  mutate(total = n()) %>% 
+  group_by(expt, cluster) %>% 
+  mutate(n_cells = n(),
+         percent_cells = 100 * (n_cells / total)) %>% 
+  ungroup() %>% 
+  dplyr::select(expt, cluster, percent_cells) %>% 
+  unique()
+
+plt <- ggplot(cluster_summary, aes(cluster, percent_cells)) +
+  ylab("Percent of cells\nfrom each experiment") +
+  scale_fill_brewer(palette = "Paired", name = "") +
+  geom_bar(aes(fill = expt),
+           stat = "identity", 
+           position = "dodge") 
+
+save_plot("cell_percentages_per_cluster.pdf", plt, base_aspect_ratio = 1.6)
+
+```

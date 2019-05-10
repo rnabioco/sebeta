@@ -1,0 +1,588 @@
+---
+title: "Russ RNA-seq QC analysis"
+author: "Kent Riemondy RBI"
+date: "02/11/2019"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    theme: sandstone
+    highlight: tango
+    fig_caption: true
+    df_print: paged
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+```{r pkgs}
+library(here)
+library(tidyverse)
+library(DESeq2)
+library(tximport)
+library(readxl)
+library(jsonlite)
+library(rtracklayer)
+library(ggrepel)
+```
+
+
+````{r dirs}
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "rnaseq")
+salmon_dir <- file.path(data_dir, "salmon")
+fc_dir <- file.path(data_dir, "featurecounts")
+log_dir <- file.path(data_dir, "logs")
+```
+
+
+### DESeq2 (Gene-level)
+
+```{r}
+
+gtf <- import("~/Projects/shared_dbases/annotation/gencode.v26.basic.annotation.gtf")
+tx2gene <- as.data.frame(gtf) %>% 
+  dplyr::select(transcript_id, gene_id) %>% 
+  unique()
+
+gene2symbol <- as.data.frame(gtf) %>% 
+  dplyr::select(gene_id, gene_name) %>% 
+  unique()
+
+
+fc_matrix <- read_tsv(file.path(fc_dir, "count_summary.tsv"),
+                       skip = 1)
+
+fc_matrix <- fc_matrix[, c(1, 8:ncol(fc_matrix))] %>% 
+  tibble::column_to_rownames("Geneid") %>% 
+  as.matrix()
+
+colnames(fc_matrix) <- basename(colnames(fc_matrix)) %>% 
+  str_match("(.+)_S[0-9]") %>% .[, 2]
+
+pdata <- data.frame(row.names = colnames(fc_matrix),
+                    entpd3 = ifelse(str_detect(colnames(fc_matrix), "_pos$"),
+                                    "Pos",
+                                    "Neg"))
+
+dds <- DESeqDataSetFromMatrix(fc_matrix, pdata, ~entpd3 )
+dds <- DESeq(dds)
+res <- results(dds)
+res_tidy <- results(dds, tidy = T)        
+
+deseq2_gene_level <- res_tidy %>% 
+  as_tibble() %>% 
+  left_join(., gene2symbol, by = c("row" = "gene_id")) %>% 
+  arrange(padj) %>% 
+  dplyr::select(gene_name, log2FoldChange, padj,
+                everything(), gene_id = row)
+
+write_tsv(deseq2_gene_level, "deseq2_gene_level.tsv")
+
+deseq2_gene_level
+
+sig_genes <- filter(deseq2_gene_level, padj < 0.05)
+```
+
+```{r write_xcel, echo = FALSE}
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between entpd3 Pos vs Neg",
+  "",
+  "Columns",
+  "gene_name",
+  "log2FoldChange",
+  "padj",
+  "gene_id",
+  "baseMean",
+  "lfcSE",
+  "stat",
+  "pvalue"
+), Description = c(
+  "",
+  "",
+  "",
+  "Gene name",
+  "fold change between ENTPD3+ and ENTPD3- (log2)",
+  "FDR corrected p-value",
+  "gene id",
+  "average normalized expression across all samples",
+  "standard error of fold change estimate",
+  "test statistic",
+  "unadjusted p-value"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+output <- c(readme_sheet, list(results = deseq2_gene_level))
+openxlsx::write.xlsx(output, "deseq2_results.xlsx")
+
+```
+
+There are `r sum(sig_genes$log2FoldChange > 0)` upregulated genes and 
+`r sum(sig_genes$log2FoldChange < 0)` downregulated genes at an adjusted p-value of 0.05. 
+
+```{r, fig.cap = "PCA was used to assess the sample to sample similarity. This analysis indicates that sample 3 and 7 are strong outliers."}
+
+dds_trans <- rlog(dds, blind = TRUE)
+plotPCA(dds_trans, intgroup = "entpd3", ntop = 500) + 
+  geom_text_repel(aes(label = name))
+```
+
+
+
+```{r hmap, fig.height = 12}
+library(ComplexHeatmap)
+n_total <- 30
+top_n_sig_up <- sig_genes %>% 
+  filter(log2FoldChange > 0) %>% 
+  arrange(padj) %>% 
+  dplyr::slice(1:n_total)
+
+top_n_sig_down <- sig_genes %>% 
+  filter(log2FoldChange < 0) %>% 
+  arrange(padj) %>% 
+  dplyr::slice(1:n_total)
+
+top_n_genes_ids <- c(top_n_sig_up$gene_id, top_n_sig_down$gene_id)
+
+top_n_genes_symbol <- c(top_n_sig_up$gene_name, top_n_sig_down$gene_name)
+
+mat <- assay(dds_trans)[top_n_genes_ids, ]
+rownames(mat) <- top_n_genes_symbol
+
+mat <- t(scale(t(mat)))
+
+colnames(mat) <- paste0(rep(1:4, each = 2), rep(c("_ENTPD-", "_ENTPD3+"), 4))
+
+pdf("heatmap_topn_up_and_down.pdf",
+    width = 5,
+    height = 9.5)
+hmap <- Heatmap(mat, 
+        col = viridis::viridis(256),
+        name = "Z-Score",
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        show_row_dend = FALSE
+        )
+hmap
+dev.off()
+
+pdf("heatmap_topn_up_and_down_no_row_clustering.pdf",
+    width = 5,
+    height = 9.5)
+hmap <- Heatmap(mat, 
+        col = viridis::viridis(256),
+        name = "Z-Score",
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        cluster_rows = FALSE,
+        )
+hmap
+dev.off()
+
+hmap
+
+
+n_total <- 50
+top_n_sig_up <- sig_genes %>% 
+  filter(log2FoldChange > 0) %>% 
+  arrange(padj) %>% 
+  dplyr::slice(1:n_total)
+
+top_n_sig_down <- sig_genes %>% 
+  filter(log2FoldChange < 0) %>% 
+  arrange(padj) %>% 
+  dplyr::slice(1:n_total)
+
+top_n_genes_ids <- c(top_n_sig_up$gene_id, top_n_sig_down$gene_id)
+
+top_n_genes_symbol <- c(top_n_sig_up$gene_name, top_n_sig_down$gene_name)
+
+mat <- assay(dds_trans)[top_n_genes_ids, ]
+rownames(mat) <- top_n_genes_symbol
+
+mat <- t(scale(t(mat)))
+
+colnames(mat) <- paste0(rep(1:4, each = 2), rep(c("_ENTPD-", "_ENTPD3+"), 4))
+
+
+pdf("heatmap_top50_up_and_down.pdf",
+    width = 5,
+    height = 14)
+
+hmap <- Heatmap(mat, 
+        col = viridis::viridis(256),
+        name = "Z-Score",
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        show_row_dend = FALSE
+        )
+hmap
+dev.off()
+
+
+pdf("heatmap_top50_up_and_down_no_row_clustering.pdf",
+    width = 5,
+    height = 14)
+
+hmap <- Heatmap(mat, 
+        col = viridis::viridis(256),
+        name = "Z-Score",
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        cluster_rows = FALSE
+        )
+hmap
+dev.off()
+
+hmap
+```
+
+
+### GO terms
+```{r, eval = F}
+res <- readxl::read_excel("deseq2_results.xlsx",
+                          sheet = 2)
+
+filter(res, padj < 0.01) %>% 
+  pull(gene_name) %>% 
+  clipr::write_clip()
+
+```
+
+
+```
+https://biit.cs.ut.ee/gprofiler/gost?organism=hsapiens&query=ENTPD3%0AWSCD2%0ASLC6A2%0AASIC1%0AGJA1%0AANKRD6%0ASYNDIG1L%0APCDH7%0ASLC4A10%0ARP11-481F24.3%0AARHGAP24%0AGUCY2C%0ALYPD1%0AANGPT2%0AFEV%0ABACE2%0APRKCH%0ACOL5A2%0AACPP%0AADAMTS9%0AFSTL4%0ASEMA3C%0AGREM2%0ANPY1R%0AHPCA%0APLPPR4%0ATRPC7%0ALINC00958%0AUG0898H09%0ASTAC%0ANEUROD4%0AGNAT3%0ACNTNAP2%0ASTUM%0ALPCAT2%0AC2CD2%0AENDOD1%0AMAP7D2%0APREX2%0ADDC%0ACXCL14%0AFAM46B%0AGPC3%0APLEKHA2%0ARGS2%0ACHGB%0AST3GAL1%0ADISP3%0ARAB3C%0ASTK32A%0ASLC6A4%0AMBNL2%0ASPEG%0ASTC1%0ALMX1A%0AGRIA4%0ATUNAR%0ATGFB2%0ARP11-3N13.2%0ARP11-491F9.1%0AMGLL%0AIGDCC4%0AAP000641.1%0ALRRC31%0AFNDC5%0APIP5K1B%0ABCAR3%0ASLITRK1%0ATMOD1%0APDE3A%0AIGDCC3%0ASTRA6%0AGPC4%0ACHGA%0ARAPGEF5%0APPP2R2C%0AADRA2A%0APALM2%0AASB9%0ASH3RF3%0AFAM13C%0ACRYBA2%0ABRINP3%0AHHEX%0ASFRP1%0ATRPC4%0AROBO2%0ACDK6%0ACXCR4%0APPP1R3C%0AEVL%0APDZRN3%0AZPLD1%0ATFPI%0ASLC43A3%0AHCN1%0AGABBR2%0ARP11-30B1.1%0AERMN%0ACRISPLD1%0ANECAB1%0ASPATA13%0AARL4C%0AMCOLN3%0AST8SIA4%0AOXGR1%0ATRANK1%0APODXL%0AAF165138.7%0ASDK1%0AARHGEF2%0AC9orf3%0AEBF1%0AFGF14%0ABRINP2%0ATTN%0ALMO2%0ABTBD11%0AKCNE4%0ASLITRK2%0ANPTX2%0AIGFBP5%0AGFOD1%0ABFSP2-AS1%0APPP1R17%0ASAMD5%0AHGD%0AAK5%0ADIXDC1%0AKIRREL3%0ACCBE1%0AMARCH8%0AGS1-358P8.4%0AKCND3%0ACNTN4%0AEGFLAM%0ASSTR2%0ASLC9A9%0AAFP%0AZDHHC14%0AMAGI2-AS3%0APTPRT%0ASST%0AJAKMIP1%0APRDM16%0ACRYBG3%0AGRIN3A%0AST6GALNAC4%0AKCTD12%0ASYDE2%0AKCNJ3%0AREPS2%0AADH6%0AKLHL1%0ADGKH%0AGCNT2%0AJAK1%0ACLMP%0AFAM234B%0AASIC4%0APAK5%0AEMB%0ALINC01146%0AMXRA8%0APLAC8%0ATMTC1%0AENOX1%0AIRS1%0AAUTS2%0ANXPH2%0AMME%0ASHANK2%0AGDF6%0AGALNT10%0AHHATL%0ACHRNA3%0ARPGR%0AARHGAP29%0AXYLT1%0AITIH1%0AKCNAB1%0ASPOCK1%0ASERGEF%0ARPIA%0AABLIM1%0AC10orf10%0ASELENOM%0ASMC2%0AC6orf141%0ATMEM236%0AATXN1%0ARP5-1063M23.3%0ASERPINA1%0AGALNT5%0ACOL25A1%0AERO1B%0ACHST9%0ACASZ1%0AIQGAP2%0AGNAL%0ACLEC7A%0AIGSF1%0ANRCAM%0ACDH3%0AITPR3%0ANKAIN3%0ARP11-469N6.1%0AHRASLS%0ARP11-715J22.6%0ASKOR2%0ASLC26A6%0APCDH9%0AADCY3%0AEPHA8%0AIHH%0ACOLCA1%0ASEMA5B%0AIKBKE%0AGCNT4%0AOLFM1%0ATSPEAR%0AHNMT%0APDK3%0AABCA1%0APROCR%0ALHFP%0ASEMA3D%0AFAM189A1%0ATHSD4%0ASYT6%0ACREB5%0AAC063980.3%0ATIMP3%0AADAMTSL3%0AMTTP%0ATNS1%0ANPHS1%0ATMED8%0AIL13RA1%0ATUB%0AANKRD7%0ALINC00982%0ASCN5A%0ASGCD%0ASPAG6%0AFAM134B%0AB3GAT2%0ASV2B%0ANA%0AHDAC9%0ASVIP%0AST6GAL1%0ARASGEF1B%0ATPST2%0ASLC16A7%0ASNX11%0AVASN%0ACCDC141%0AARSJ%0ACXCL12%0AKLHDC8A%0AISX%0ARASSF5%0AGRIA2%0AHS3ST5%0AZMAT4%0AARFGEF3%0ASLC4A11%0ATMCC3%0ADRAIC%0ASOAT1%0AHMGB3%0AFFAR1%0ASP8%0ACHRNB4%0AFGFR2%0ASLC7A14%0ARERG%0ACDH6%0ASGPL1%0ACYP39A1%0AMEGF11%0APSME4%0ALDLRAD3%0ASPIRE1%0AGAD1%0AAPCDD1%0ASLC18A3%0ACBLN1%0ADNAJC12%0ACHML%0ATFCP2L1%0ACYP27A1%0AAMER3%0ANEFM%0ALRIG3%0AFGF12%0ASLC27A6%0ATPH1%0AERRFI1%0ATMEM74%0APYY%0ARP11-734I18.1%0ASLC8A1%0AKCNV1%0AREEP1%0AUGT8%0AKCNA3%0APRUNE2%0ADMBT1%0ASLC17A6%0ALGR4%0ASPRY2%0AANKRD13A%0APRODH2%0ACADM1%0ASORCS1%0AFAM102B%0APFKP%0AIFITM1%0ASLC25A34%0ASCN7A%0AZFAND4%0AMEG3%0AORMDL3%0ALRRTM3%0ACAMK2A%0AMAPKAPK2%0APLCG2%0AFAM149A%0ACADPS%0ACARD11%0AB3GAT1%0ACNKSR1%0ATMEM196%0APSAT1%0ADYRK2%0AMPDZ%0AB3GLCT%0ANFATC2%0ALCT%0AOVOS2%0AFAM135B%0AC3orf80%0APITHD1%0AHECW2%0ATANC1%0AGRPR%0ALINC01336%0ARP1-152L7.5%0APITPNM2%0ATFF3%0APTPRM%0ALXN%0ARP11-758M4.4%0AACTR1B%0ALGI3%0APRAG1%0ACOL6A6%0APIK3R1%0AARX%0ADPYSL5%0AFAM219A%0ASIX2%0APLSCR4%0ABOC%0ATDO2%0ALRP5L%0APDZD2%0ADMRT3%0ATENM1%0AGHR%0ACACNA1E%0ACEP126%0AKCNJ8%0AIGFBP3%0ARP11-495L19.1%0ARP11-650L12.2%0ASEMA4B%0AGIP%0AEMID1%0AZBTB47%0AFRMPD3%0ARP11-115D19.1%0ATPPP%0ASLITRK6%0APGF%0AGPC1%0APGR%0AUBXN10%0ASLC25A29%0ADNAI1%0ATIMP1%0APSTPIP1%0ABMPER%0APLEKHM2%0ATMEM108%0APLA2G4C%0ADIO3OS%0AARHGEF3%0AVLDLR%0ATM6SF1%0ASLC18A1%0AANO4%0APHLDA1%0ANFKBIZ%0AEPB41L4B%0AABCC9%0ACALY%0AARID5A&ordered=true&all_results=false&no_iea=false&combined=false&measure_underrepresentation=false&domain_scope=annotated&significance_threshold_method=g_SCS&user_threshold=0.05&numeric_namespace=ENTREZGENE_ACC&sources=GO:MF,GO:CC,GO:BP,KEGG,TF,REAC,MIRNA,HPA,CORUM,HP,WP&background=
+```
+
+```{r}
+library(cowplot)
+gprofiler_res <- read_csv("gProfiler_res.csv")
+  
+plt_dat <- group_by(gprofiler_res, source) %>% 
+  arrange(adjusted_p_value, .by_group = T) %>% 
+  dplyr::slice(1:10) %>% 
+  ungroup()
+
+rename_go <- c(
+  "GO:MF"= "Molecular Function",
+  "GO:CC"= "Cellular Component",
+  "GO:BP" = "Biological Process",
+  "TF" = "TF binding"
+)
+
+plt_dat <- filter(plt_dat,
+                  source %in% names(rename_go)) %>% 
+                  mutate(
+                  term_name_short = ifelse(str_count(term_name, " ") >= 4,
+                                           word(term_name, 1, 4),
+                                           term_name),
+                  term_name_short = str_remove(term_name_short, "^Factor: "),
+                  source = rename_go[source])
+
+plt_dat$term_name_short <- factor(plt_dat$term_name_short, 
+                                  levels = rev(plt_dat$term_name_short))
+
+
+
+p <- ggplot(plt_dat, aes(term_name_short, negative_log10_of_adjusted_p_value)) +
+  geom_col(aes(fill = source), color = "black") +
+  coord_flip() +
+  facet_wrap(~source, drop = T, scales = "free_y", ncol = 1) +
+  scale_fill_brewer(palette = "Paired") + 
+  labs(x = "",
+       y = "-log10(adjusted pvalue)") + 
+  theme_cowplot() +
+  theme(legend.pos = "none")
+
+save_plot("Go_term_enrichment.pdf", p, nrow = 2.2, ncol = 1, base_asp = 2)
+```
+
+## Older day 23 v day 30 dataset
+
+
+
+
+
+````{r dirs}
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "rnaseq", "d23_d30")
+salmon_dir <- file.path(data_dir, "salmon")
+fc_dir <- file.path(data_dir, "featurecounts")
+log_dir <- file.path(data_dir, "logs")
+```
+
+
+### DESeq2 (Gene-level)
+
+```{r}
+
+gtf <- import("~/Projects/shared_dbases/annotation/gencode.v26.basic.annotation.gtf")
+tx2gene <- as.data.frame(gtf) %>% 
+  dplyr::select(transcript_id, gene_id) %>% 
+  unique()
+
+gene2symbol <- as.data.frame(gtf) %>% 
+  dplyr::select(gene_id, gene_name) %>% 
+  unique()
+
+
+fc_matrix <- read_tsv(file.path(fc_dir, "count_summary.tsv"),
+                       skip = 1)
+
+fc_matrix <- fc_matrix[, c(1, 8:ncol(fc_matrix))] %>% 
+  tibble::column_to_rownames("Geneid") %>% 
+  as.matrix()
+
+sample_lookup <- c(
+  "3" = "day_23_rep1",
+  "4" = "day_30_rep1",
+  "5" = "day_23_rep2",
+  "6" = "day_30_rep2",
+  "7" = "day_23_rep3",
+  "8" = "day_30_rep3"
+)
+
+colnames(fc_matrix) <- basename(colnames(fc_matrix)) %>% 
+  str_match("(.+)_S[0-9]") %>% 
+  .[, 2] %>% 
+  sample_lookup[.] %>% 
+  unname()
+
+pdata <- data.frame(row.names = colnames(fc_matrix),
+                    day = str_split(colnames(fc_matrix),
+                                       "_rep", 
+                                       simplify = TRUE) %>% .[, 1])
+
+dds <- DESeqDataSetFromMatrix(fc_matrix, pdata, ~ day )
+dds <- DESeq(dds)
+res <- results(dds)
+res_tidy <- results(dds, tidy = T)        
+
+deseq2_gene_level <- res_tidy %>% 
+  as_tibble() %>% 
+  left_join(., gene2symbol, by = c("row" = "gene_id")) %>% 
+  arrange(padj) %>% 
+  dplyr::select(gene_name, log2FoldChange, padj,
+                everything(), gene_id = row)
+
+write_tsv(deseq2_gene_level, "deseq2_gene_level_d23_d30.tsv")
+
+deseq2_gene_level
+
+sig_genes <- filter(deseq2_gene_level, padj < 0.05)
+```
+
+```{r write_xcel, echo = FALSE}
+
+readme_sheet <- tibble(
+  Columns = c(
+  "Genes differentially expressed between day 30 and day 30 differentiation",
+  "",
+  "Columns",
+  "gene_name",
+  "log2FoldChange",
+  "padj",
+  "gene_id",
+  "baseMean",
+  "lfcSE",
+  "stat",
+  "pvalue"
+), Description = c(
+  "",
+  "",
+  "",
+  "Gene name",
+  "fold change between Day 30 and Day 23 (log2)",
+  "FDR corrected p-value",
+  "gene id",
+  "average normalized expression across all samples",
+  "standard error of fold change estimate",
+  "test statistic",
+  "unadjusted p-value"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+output <- c(readme_sheet, list(results = deseq2_gene_level))
+openxlsx::write.xlsx(output, "deseq2_results_d23_d30.xlsx")
+
+```
+
+There are `r sum(sig_genes$log2FoldChange > 0)` upregulated genes and 
+`r sum(sig_genes$log2FoldChange < 0)` downregulated genes at an adjusted p-value of 0.05. 
+
+```{r, fig.cap = "PCA was used to assess the sample to sample similarity. This analysis indicates that sample 3 and 7 are strong outliers."}
+
+dds_trans <- rlog(dds, blind = TRUE)
+plotPCA(dds_trans, intgroup = "day", ntop = 500) + 
+  geom_text_repel(aes(label = name))
+```
+
+
+```{r hmap, fig.height = 12}
+library(ComplexHeatmap)
+n_total <- 30
+top_n_sig_up <- sig_genes %>% 
+  filter(log2FoldChange > 0) %>% 
+  arrange(padj) %>% 
+  dplyr::slice(1:n_total)
+
+top_n_sig_down <- sig_genes %>% 
+  filter(log2FoldChange < 0) %>% 
+  arrange(padj) %>% 
+  dplyr::slice(1:n_total)
+
+top_n_genes_ids <- c(top_n_sig_up$gene_id, top_n_sig_down$gene_id)
+
+top_n_genes_symbol <- c(top_n_sig_up$gene_name,
+                        top_n_sig_down$gene_name)
+
+mat <- assay(dds_trans)[top_n_genes_ids, ]
+rownames(mat) <- top_n_genes_symbol
+
+mat <- t(scale(t(mat)))
+
+pdf("d23_d30_heatmap_topn_up_and_down.pdf",
+    width = 5,
+    height = 9.5)
+hmap <- Heatmap(mat, 
+        col = viridis::viridis(256),
+        name = "Z-Score",
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        show_row_dend = FALSE
+        )
+hmap
+dev.off()
+
+pdf("d23_d30_heatmap_topn_up_and_down_no_row_clustering.pdf",
+    width = 5,
+    height = 9.5)
+hmap <- Heatmap(mat, 
+        col = viridis::viridis(256),
+        name = "Z-Score",
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        cluster_rows = FALSE,
+        )
+hmap
+dev.off()
+
+hmap
+
+
+n_total <- 50
+top_n_sig_up <- sig_genes %>% 
+  filter(log2FoldChange > 0) %>% 
+  arrange(padj) %>% 
+  dplyr::slice(1:n_total)
+
+top_n_sig_down <- sig_genes %>% 
+  filter(log2FoldChange < 0) %>% 
+  arrange(padj) %>% 
+  dplyr::slice(1:n_total)
+
+top_n_genes_ids <- c(top_n_sig_up$gene_id, top_n_sig_down$gene_id)
+
+top_n_genes_symbol <- c(top_n_sig_up$gene_name, top_n_sig_down$gene_name)
+
+mat <- assay(dds_trans)[top_n_genes_ids, ]
+rownames(mat) <- top_n_genes_symbol
+
+mat <- t(scale(t(mat)))
+
+
+pdf("d23_d30_heatmap_top50_up_and_down.pdf",
+    width = 5,
+    height = 14)
+
+hmap <- Heatmap(mat, 
+        col = viridis::viridis(256),
+        name = "Z-Score",
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        show_row_dend = FALSE
+        )
+hmap
+dev.off()
+
+
+pdf("d23_d30_heatmap_top50_up_and_down_no_row_clustering.pdf",
+    width = 5,
+    height = 14)
+
+hmap <- Heatmap(mat, 
+        col = viridis::viridis(256),
+        name = "Z-Score",
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        cluster_rows = FALSE
+        )
+hmap
+dev.off()
+
+hmap
+```
+
+```{r, eval = F}
+
+genes_to_plot <- c(
+    "ONECUT3",
+    "INSM2",
+    "IAPP",
+    "ABCC8",
+    "GLP1R",
+    "SLC2A2",
+    "RXRG",
+    "FXYD2",
+    "CACNA1D",
+    "ABCC8",
+    "GLP1R",
+    "SLC2A2",
+    "ERO1B",
+    "G6PC2",
+    "PCP4",
+    "IRX1",
+    "IRX2",
+    "ARX",
+    "FEV")
+
+# just show log2 fold changes
+
+log2mat <- deseq2_gene_level %>% 
+  inner_join(tibble(gene_name = genes_to_plot),
+             ., 
+             by = "gene_name") %>% 
+  select(gene_name, log2FoldChange) %>% 
+  unique() %>% 
+  tibble::column_to_rownames("gene_name") %>% 
+  as.matrix() 
+
+splits <- c(rep("beta cell\nmaturation", 8), 
+            rep("insulin\nsecretion", 4), 
+            rep("alpha cell\nidentity", 4))
+
+pdf("d23_v_d30_log2hmap.pdf", width = 4.5, height = 4)
+Heatmap(log2mat, name = "Fold-Change\n(log2)", 
+        col = viridis::viridis(256),  
+        cluster_rows = FALSE, 
+        row_names_side = "left", 
+        row_title_rot = 0,
+        split = factor(splits, 
+                       levels = c("beta cell\nmaturation",
+                         "insulin\nsecretion", 
+                         "alpha cell\nidentity")),
+        show_column_names = FALSE)
+dev.off()
+
+```

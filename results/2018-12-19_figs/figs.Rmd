@@ -1,0 +1,1836 @@
+---
+title: "Generate Figures"
+author: "Kent Riemondy RBI"
+date: "`R Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir_expt2 <- "~/Projects/10x_data/runs/20180918_russ/results"
+```
+
+## Experiment Summary
+
+Sample | Description
+------------- | ---------------- 
+Russ_GFP_Sort | 2nd experiment
+Russ_d36GFP_Reagg | 2nd experiment
+
+```{r get_data}
+
+samples_expt2 <- c(
+  "Russ_GFP_Sort",
+  "Russ_d36GFP_Reagg")
+
+sample_paths_2 <- file.path(data_dir_expt2,
+                          samples_expt2,
+                          "outs", 
+                          "filtered_gene_bc_matrices", 
+                          "GRCh38_transgenes")
+
+names(sample_paths_2) <- samples_expt2
+
+bcells <- map(sample_paths_2, Seurat::Read10X)
+```
+
+```{r create_seurat, message = F, results = 'hide', warning = F}
+bcells <- map(bcells, ~CreateSeuratObject(raw.data = .x, 
+                              min.cells = 5,
+                              min.genes = 250, 
+                              project = "Russ",
+                              names.field = c(1,2), 
+                              names.delim = "_"))
+```
+
+```{r additional_mdata}
+# add correct sample identifier
+ids <- imap(bcells, 
+            ~data.frame(row.names = rownames(.x@meta.data), 
+                        expt = rep(.y, nrow(.x@meta.data))))
+bcells <- map2(bcells, ids, function(x, y) AddMetaData(x, y, "expt"))
+```
+
+
+## Mitochondrial Reads 
+
+
+```{r QC}
+mito_genes <- map(bcells, 
+                  ~str_subset(rownames(.x@data), "^MT-"))
+
+proportion_mito <- map2(bcells, mito_genes, 
+                        ~Matrix::colSums(.x@data[.y, ]) / 
+                          Matrix::colSums(.x@data))
+
+bcells <- map2(bcells, proportion_mito, 
+               ~AddMetaData(.x, .y, "proportion_mito"))
+```
+
+
+```{r, apply_filters}
+bcells <- map(bcells, 
+              ~FilterCells(.x, 
+                       subset.names = c("nUMI", "proportion_mito"), 
+                       low.thresholds = c(250, -Inf), 
+                       high.thresholds = c(75000, 0.20)))
+
+bcells <- map(bcells, NormalizeData)
+
+bcells <- map(bcells, ScaleData, display.progress = F)
+
+bcells <- map(bcells, 
+              ~FindVariableGenes(.x, do.plot = F))
+
+vargenes <- map(bcells, ~head(rownames(.x@hvg.info), 2000))
+
+genes_use <- Reduce(function(x, y) intersect(x, y), vargenes)
+```
+
+
+
+## Without CCA
+
+```{r}
+
+bcells <- map(bcells, 
+              ~RunPCA(.x, 
+                      pc.genes = rownames(.x@data),
+                      pcs.compute = 20, 
+                      seed.use = 42, 
+                      do.print = FALSE))
+
+map(bcells, PCElbowPlot)
+
+bcells <- map(bcells, 
+              ~RunTSNE(.x, 
+                       reduction.use = "pca",
+                       dims.use = 1:20, 
+                       do.fast = T, 
+                       seed.use = 42))
+
+
+bcells <- map(bcells, ~FindClusters(.x, 
+                     reduction.type = "pca", 
+                     dims.use = 1:20,
+                     k.param = 30, 
+                     resolution = 0.5, 
+                     print.output = 0, 
+                     plot.SNN = FALSE,
+                     save.SNN = FALSE, 
+                     random.seed = 42))
+
+```
+
+
+```{r}
+names(bcells) <- c("Sorted", "Reaggregated")
+
+```
+
+## make tsnes
+
+```{r}
+dir.create("general_tsnes", showWarnings = F)
+
+
+p <- imap(bcells, ~plot_feature(.x, "egfp", 
+                  pt_alpha = 1,
+                  pt_size = 0.5) + 
+            labs(title = .y))
+plt <- plot_grid(plotlist = p, nrow = 1)
+save_plot("general_tsnes/egfp.pdf", plt, nrow = 1, ncol = 2,
+          base_aspect_ratio = 1.2)
+
+
+plts <- imap(bcells, 
+    function(sobj, name) {
+      plot_feature(sobj, 
+                   feature = "res.0.5", 
+               pt_size = 0.5, 
+               pt_alpha = 1,
+         .cols = palette_OkabeIto, 
+         legend_title = FALSE
+          ) +
+        labs(title = name)})
+
+plt <- plot_grid(plotlist = plts, nrow = 1)
+save_plot("general_tsnes/cluster_tsnes.pdf", 
+          plt, nrow = 1, ncol = 2, base_aspect_ratio = 1.2)
+
+plts <- imap(bcells, 
+    function(sobj, name) {
+      plot_feature(sobj, 
+                   feature = "res.0.5", 
+               pt_size = 0.5, 
+               pt_alpha = 1,
+         .cols = palette_OkabeIto, 
+         legend_title = FALSE, label_text = TRUE, label_color = "black"
+          ) +
+        labs(title = name)})
+
+plt <- plot_grid(plotlist = plts, nrow = 1)
+save_plot("general_tsnes/cluster_tsnes_labeled.pdf", 
+          plt, nrow = 1, ncol = 2, base_aspect_ratio = 1.2)
+
+n_cells_per_cluster <- map(bcells, 
+    function(x){
+      group_by(x@meta.data, res.0.5) %>% 
+        summarize(n_cells = n()) %>% 
+        dplyr::rename(cluster = res.0.5) %>% 
+        ungroup() %>% 
+        mutate(percent_cells = 100 * (n_cells / sum(n_cells)))
+    })
+openxlsx::write.xlsx(n_cells_per_cluster, "number_of_cells_per_cluster.xlsx")
+
+```
+
+## specific markers overlayed on tSNEs
+
+These are located in the `other_tsnes` directory. 
+
+```{r}
+dir.create("other_tsnes", showWarnings = F)
+
+genes <- c("CD9", "ST8SIA1", "CFAP126", "ENTPD3")
+
+walk(genes, 
+    function(gene) {
+      plts <- imap(bcells, 
+        function(sobj, name) {
+        plot_feature(sobj, 
+                   feature = gene, 
+             #  pt_size = 0.05, 
+               pt_alpha = 1
+          ) +
+        labs(title = name)})
+
+      plt <- plot_grid(plotlist = plts, nrow = 1)
+
+      save_plot(file.path("other_tsnes",
+                          paste0(gene, ".pdf")),
+                plt, ncol = 2, nrow = 1, base_aspect_ratio = 1.2)})
+               
+
+```
+
+## tSNEs colored by markers of each cluster
+
+Next I will generate a very large number of tSNE plots that are each colored by the expression of marker genes of each cluster. The log(normalized expression) is displayed on the plots, and the scale for each gene is set to the maximum expression in the dataset. These are located in the `marker_tsnes` directory.  
+
+I will plot out the top 20 markers of each cluster. The markers are defined by comparing the gene expression of a cluster to the gene expression of all other cells in the dataset. There will therefore be some markers that are shared between clusters. We can do future work to more precisvely define which clusters to compare to find marker genes. Note also that this analysis doesn't distinguish between the T1D modeling and control cells, which is defensible because there are not large differences between these cells. 
+
+```{r}
+dir.create("marker_tables")
+
+markers <- map(bcells, 
+    function(sobj){
+      SetAllIdent(sobj, "res.0.5")
+       markers <- FindAllMarkers(sobj,
+                          only.pos = TRUE,
+                          min.pct = 0.10,
+                          logfc.threshold = 0.25,
+                          return.thresh = 0.05)
+       markers
+    }
+)
+
+imap(markers, ~write_tsv(.x, 
+                         file.path("marker_tables", 
+                                   paste0(.y, "_markers.txt"))))
+
+iwalk(markers, 
+    function(x, id) {
+      y <- split(x, x$cluster)
+      openxlsx::write.xlsx(y, file.path("marker_tables",
+                                        paste0(id,
+                                               "_markers.xlsx")))})
+```
+
+```{r marker_tsnes}
+dir.create("marker_tsnes", showWarnings = F)
+dir.create(file.path("marker_tsnes", "cluster_summaries"), showWarnings = F)
+dir.create(file.path("marker_tsnes", "individual_genes"), showWarnings = F)      
+expts <- c("Sorted", "Reaggregated")
+
+walk(expts, ~dir.create(file.path("marker_tsnes", "cluster_summaries", .x)))
+walk(expts, ~dir.create(file.path("marker_tsnes", "individual_genes", .x)))
+
+markers <- map(expts, 
+               ~read_tsv(file.path("marker_tables", 
+                                   paste0(.x, "_markers.txt"))))
+
+names(markers) <- expts
+
+plot_cluster_summaries <- function(marker_df, 
+                                   seurat_object,
+                                   id){
+  
+  top_n_markers <- group_by(marker_df, cluster) %>% 
+  arrange(p_val_adj, desc(avg_logFC), .by_group = T) %>% 
+  dplyr::slice(1:30) 
+
+  top_n_markers_list <- split(top_n_markers, top_n_markers$cluster) %>% 
+    map(., ~dplyr::pull(.x, gene))
+
+  imap(top_n_markers_list,
+       function(x, y){
+         plts <- map(x,
+                   function(gene_to_plot){
+                     p <- plot_feature(seurat_object, 
+                                       feature = gene_to_plot,
+                                       pt_alpha = 1)
+                     save_plot(file.path("marker_tsnes",
+                                         "individual_genes",
+                                         id,
+                                         paste0(gene_to_plot, "_cluster_", y,
+                                                ".pdf")),
+                               p,
+                               base_aspect_ratio = 1.2)
+                     p
+                   })
+       plt <- plot_grid(plotlist = plts,
+                        nrow = 5,
+                        ncol = 6)
+       save_plot(file.path("marker_tsnes",
+                           "cluster_summaries",
+                           id,
+                           paste0("cluster_", y, "_topn_plots.pdf")),
+                 plt,
+                 nrow = 5,
+                 ncol = 6,
+                 base_aspect_ratio = 1.2)
+     })
+}
+
+pmap(list(markers, bcells, expts), 
+      function(x, y, z) plot_cluster_summaries(x, y, z))
+```
+
+```{r cell_counts}
+
+cluster_summary <- imap_dfr(bcells, 
+                           ~data_frame(id = .x@cell.names, 
+                                       expt = .y, 
+                                       cluster = .x@meta.data$res.0.5))
+
+cluster_summary <- group_by(cluster_summary, expt) %>% 
+  mutate(total = n()) %>% 
+  group_by(expt, cluster) %>% 
+  mutate(n_cells = n(),
+         percent_cells = 100 * (n_cells / total)) %>% 
+  ungroup() %>% 
+  dplyr::select(expt, cluster, percent_cells) %>% 
+  unique()
+
+plt <- ggplot(cluster_summary, aes(cluster, percent_cells)) +
+  ylab("Percent of cells\nfrom each experiment") +
+  scale_fill_manual(values = palette_OkabeIto, name = "") +
+  geom_bar(aes(fill = expt),
+           stat = "identity", 
+           position = "dodge") 
+
+save_plot("cell_percentages_per_cluster.pdf", 
+          plt, 
+          base_aspect_ratio = 1.6)
+
+```
+
+```{r}
+iwalk(bcells, 
+     ~saveRDS(.x, paste0(.y, ".rds")))
+
+```
+
+## CCA
+
+```{r cca, eval = F}
+bcell <- RunCCA(bcells$Russ_GFP_Sort, bcells$Russ_d36GFP_Reagg,
+                genes.use = genes_use, 
+                add.cell.id1 = names(bcells)[1], 
+                add.cell.id2 = names(bcells)[2], 
+                num.cc = 20)
+
+bcell <- AlignSubspace(bcell, 
+                       reduction.type = "cca", 
+                       grouping.var = "expt", 
+                       dims.align = 1:20)
+
+bcell <- RunTSNE(bcell, 
+                 reduction.use = "cca.aligned", 
+                 dims.use = 1:20, 
+                 do.fast = T)
+
+TSNEPlot(bcell, do.return = T, 
+               pt.size = 0.5, group.by = "expt", 
+         colors.use = viridis(4))
+
+FeaturePlot(bcell, c("INS", "egfp"), do.return = T)
+
+bcell <- FindClusters(bcell, 
+                     reduction.type = "cca.aligned", 
+                     dims.use = 1:20,
+                     k.param = 40, 
+                     resolution = 0.5, 
+                     print.output = 0, 
+                     plot.SNN = F,
+                     save.SNN = T, 
+                     random.seed = 0)
+
+saveRDS(bcell, "sobj_cca.rds")
+rm(bcell)
+gc()
+```
+
+```{r}
+cca <- readRDS("sobj_cca.rds")
+
+cca@meta.data$expt_id <- ifelse(cca@meta.data$expt == "Russ_GFP_Sort",
+                                "Sorted",
+                                "Reaggregated")
+
+
+cca <- SetAllIdent(cca, "res.0.5")
+cca_markers <- FindAllMarkers(cca,
+                          only.pos = TRUE,
+                          min.pct = 0.10,
+                          logfc.threshold = 0.25,
+                          return.thresh = 0.05)
+       
+write_tsv(cca_markers, 
+          file.path("marker_tables","cca_markers.txt"))
+
+cca_markers_split <- split(cca_markers,
+                           cca_markers$cluster)
+
+openxlsx::write.xlsx(cca_markers_split,
+                     file.path("marker_tables",                                          "cca_markers.xlsx"))
+
+
+dir.create(file.path("marker_tsnes",
+                     "cluster_summaries", "cca"))
+dir.create(file.path("marker_tsnes",
+                     "individual_genes", "cca"))
+
+ plot_cluster_summaries(cca_markers, cca, "cca")
+ 
+cluster_names <- c(
+"0" = "Polyhormonal-like (GCG+)",
+"1" = "Mature (IAPP+, INS+)",
+"2"=  "Unknown (NOV+, GAST+)",
+"3" = "Immature (FEV+)",
+"4" = "Polyhormonal-like (SST+)",
+"5" = "Immature (FEV+ GC+)",
+"6" = "IGF2+",
+"7" = "Proliferating",
+"8" = "Unknown (OVOS2+, STC2+)",
+"9" = "Unknown")
+
+cca@meta.data$cell_type <- cluster_names[cca@meta.data$res.0.5]
+
+
+plt <- plot_feature(cca, 
+                    "cell_type",
+                    .cols = c(palette_OkabeIto,
+                              brewer.pal(9, "Paired")))
+                    
+save_plot("general_tsnes/cca/cell_types_labeled.pdf",
+          plt)
+```
+
+
+## make tsnes
+
+```{r}
+dir.create("general_tsnes/cca", showWarnings = F)
+
+cca  <- SetAllIdent(cca, "expt_id")
+
+plt <- plot_feature(cca, 
+                   feature = "expt_id", 
+               pt_size = 0.5, 
+               pt_alpha = 1,
+         .cols = c(palette_OkabeIto, brewer.pal(9, "Paired")), 
+         legend_title = FALSE
+          ) +
+  theme(legend.pos = "top")
+
+save_plot("general_tsnes/cca/expt_tsne.pdf", 
+          plt, base_aspect_ratio = 1.0)
+
+plt <- plot_feature(cca, 
+                   feature = "res.0.5", 
+               pt_size = 0.5, 
+               pt_alpha = 1,
+         .cols = c(palette_OkabeIto, brewer.pal(9, "Paired")), 
+         legend_title = FALSE
+          ) 
+
+save_plot("general_tsnes/cca/cluster_tsne.pdf", 
+          plt, base_aspect_ratio = 1.2)
+
+plt <- plot_feature(cca, 
+                   feature = "res.0.5", 
+               pt_size = 0.5, 
+               pt_alpha = 1,
+         .cols = c(palette_OkabeIto, brewer.pal(9, "Paired")), 
+         legend_title = FALSE, label_text = TRUE, label_color = "black"
+          ) 
+
+save_plot("general_tsnes/cca/cluster_tsne_labeled.pdf", 
+          plt, base_aspect_ratio = 1.2)
+
+plt <- plot_feature(cca, 
+                   feature = "egfp", 
+               pt_size = 0.5, 
+               pt_alpha = 1,
+         legend_title = "EGFP"
+          ) 
+
+save_plot("general_tsnes/cca/egfp_tsne.pdf", 
+          plt, base_aspect_ratio = 1.2)
+
+```
+
+
+```{r}
+
+genes <- c("FEV",
+  "SST",
+  "GCG",
+  "ENTPD3",
+  "egfp",
+  "IAPP",
+  "INS",
+  "IGF2"
+  )
+
+plts <- map(genes, ~plot_feature(cca, .x))
+
+plt <- plot_grid(plotlist = plts, nrow = 4, 
+                 ncol = 2)
+
+save_plot("general_tsnes/cca/cca_gene_tsne.pdf", plt, nrow = 4, ncol = 2)
+```
+
+
+### cca 
+
+```{r}
+
+# get markers for mature b -cells 
+marker_genes <- read_tsv("marker_tables/Reaggregated_markers.txt") %>% 
+  filter(cluster == 0) %>% 
+  pull(gene) %>% 
+  unique()
+
+# modify VizDimReduction to return tidy data for ggplotting
+top_dim_genes <- function(object, reduction.type = "pca", dims.use = 1:5, num.genes = 30, 
+    use.full = FALSE, font.size = 0.5, nCol = NULL, 
+    do.balanced = FALSE) 
+{
+    if (use.full) {
+        dim.scores <- GetDimReduction(object = object, reduction.type = reduction.type, 
+            slot = "gene.loadings.full")
+    } else {
+        dim.scores <- GetDimReduction(object = object, reduction.type = reduction.type, 
+            slot = "gene.loadings")
+    }
+    if (is.null(x = nCol)) {
+        if (length(x = dims.use) > 6) {
+            nCol <- 3
+        }
+        else if (length(x = dims.use) > 9) {
+            nCol <- 4
+        }
+        else {
+            nCol <- 2
+        }
+    }
+    num.row <- floor(x = length(x = dims.use)/nCol - 1e-05) +     1
+    reduction.name <- toupper(reduction.type)
+    par(mfrow = c(num.row, nCol))
+    out <- list()
+    for (i in dims.use) {
+        subset.use <- dim.scores[DimTopGenes(object = object, 
+            dim.use = i, reduction.type = reduction.type, num.genes = num.genes, 
+            use.full = use.full, do.balanced = do.balanced), 
+            ]
+        out[[i]] <- subset.use[, i, drop = F]
+        colnames(out[[i]]) <- "value"
+        names(out)[i] <- paste0(reduction.name, i)
+    }
+    map_dfr(out, ~as.data.frame(.x) %>% 
+              tibble::rownames_to_column("gene"), 
+            .id = "dimension")
+}
+
+plt_dat <- top_dim_genes(cca, 
+                         reduction.type = "cca", 
+                         num.genes = 50, 
+                         dims.use = 1:3, 
+                         do.balanced = T) %>% 
+  mutate(marker = ifelse(gene %in% marker_genes,
+                         "Mature B-cell marker",
+                         "other gene")) %>% 
+  group_by(dimension) %>% 
+  arrange(value, .by_group = T)
+
+plts <- map( unique(plt_dat$dimension), 
+     function(d){
+  res <- filter(plt_dat, dimension == d) 
+  res$gene <- factor(res$gene, levels = res$gene[order(res$value)])
+  markers <- res$marker[order(res$value)]
+  label_cols <- ifelse(markers == "Mature B-cell marker",
+         brewer.pal(3, "Set1")[1],
+         "black")
+  ggplot(res, aes(value, gene)) +
+  geom_point(aes(color = marker)) + 
+  scale_color_brewer(palette = "Set1", name = "") +
+  labs(x = d, y = "")  +
+  guides(color = guide_legend(override.aes = list(size = 4),
+         nrow = 2)) +
+  theme(legend.pos = "top",
+        axis.text.y = element_text(color = label_cols)) 
+})
+
+plt <- plot_grid(plotlist = plts, nrow = 1, ncol = 3)
+save_plot(file.path("general_tsnes", "cca", "cca_analysis_top_genes.pdf"),
+          plt, nrow = 1, ncol = 3, base_aspect_ratio = 0.33, base_height = 8)
+```
+## specific markers overlayed on tSNEs
+
+These are located in the `other_tsnes` directory. 
+
+```{r}
+dir.create("other_tsnes/cca", showWarnings = F)
+
+genes <- c("CD9", "ST8SIA1", "CFAP126", "ENTPD3")
+walk(genes, 
+    function(x) {
+      plt <- plot_feature(cca, x, pt_alpha = 1)
+      save_plot(file.path("other_tsnes/cca",
+                          paste0(x, ".pdf")),
+                plt)})
+               
+
+```
+
+## tSNEs colored by markers of each cluster
+
+```{r marker_tsnes}
+dir.create("marker_tsnes", showWarnings = F)
+dir.create(file.path("marker_tsnes", "cluster_summaries"), showWarnings = F)
+dir.create(file.path("marker_tsnes", "individual_genes"), showWarnings = F)      
+           
+markers <- suppressMessages(read_tsv("ctrl_markers.txt"))
+
+top_n_markers <- group_by(markers, cluster) %>% 
+  arrange(p_val_adj, desc(avg_logFC), .by_group = T) %>% 
+  dplyr::slice(1:20) 
+
+top_n_markers_list <- split(top_n_markers, top_n_markers$cluster) %>% 
+  map(., ~dplyr::pull(.x, gene))
+
+imap(top_n_markers_list,
+     function(x, y){
+       plts <- map(x,
+                   function(gene_to_plot){
+                     p <- plot_feature(bcells, gene = gene_to_plot, 
+                                       pt.alpha = 1)
+                     save_plot(file.path("marker_tsnes",
+                                         "individual_genes",
+                                         paste0(gene_to_plot, "_cluster_", y,
+                                                ".pdf")),
+                               p,
+                               base_aspect_ratio = 1.2)
+                     p
+                   })
+       plt <- plot_grid(plotlist = plts,
+                        nrow = 4,
+                        ncol = 5)
+       save_plot(file.path("marker_tsnes",
+                           "cluster_summaries",
+                           paste0("cluster_", y, "_topn_plots.pdf")),
+                 plt,
+                 nrow = 4,
+                 ncol = 5,
+                 base_aspect_ratio = 1.2)
+     })
+
+
+```
+
+```{r cell_counts}
+
+cluster_ids <- bcells@meta.data$res.0.3
+cell_ids <- bcells@cell.names
+expt <- bcells@meta.data$expt
+
+cluster_summary <- data_frame(id = cell_ids, expt = expt, cluster = cluster_ids)
+cluster_summary <- group_by(cluster_summary, expt) %>% 
+  mutate(total = n()) %>% 
+  group_by(expt, cluster) %>% 
+  mutate(n_cells = n(),
+         percent_cells = 100 * (n_cells / total)) %>% 
+  ungroup() %>% 
+  dplyr::select(expt, cluster, percent_cells) %>% 
+  unique()
+
+plt <- ggplot(cluster_summary, aes(cluster, percent_cells)) +
+  ylab("Percent of cells\nfrom each experiment") +
+  scale_fill_brewer(palette = "Paired", name = "") +
+  geom_bar(aes(fill = expt),
+           stat = "identity", 
+           position = "dodge") 
+
+save_plot("cell_percentages_per_cluster.pdf", plt, base_aspect_ratio = 1.6)
+
+```
+
+
+
+## Cluster labels
+
+Assign cell type names to cluster labels. 
+
+Polyhormonal-like (GCG) (0)
+Immature-like (FEV,) (1)
+Mature (INS) (2)
+Mature (IAPP) (2)
+Polyhormonal-like (SST) (3)
+Igf2-High (Igf2)
+Subpopulation Beta 4 and 2 (CD9)
+Proliferating cells (ki67)
+
+
+```{r}
+plot_feature(bcells$Sorted, "res.0.5",
+             label_text = TRUE,
+             label_color = "Black")
+```
+
+```{r}
+sorted_ids_to_names <- c(
+  "0" = "Polyhormonal (GCG+)",
+  "1" = "Immature (FEV+)",
+  "2" = "Mature (INS+, IAPP+)",
+  "3" = "Mature (INS+, IAPP+)",
+  "4" = "Polyhormonal (SST+)",
+  "5" = "Igf2+",
+  "6" = "Beta subpopulation 2 and 4 (CD9+)",
+  "7" = "Proliferating (MKI67+)"
+)
+
+bcells$Sorted@meta.data$cell_type <- sorted_ids_to_names[bcells$Sorted@meta.data$res.0.5]
+
+vec <- brewer.pal(9, "RdYlGn")
+n <- 7
+colmap <- get_high_low(vec, 7)
+names(colmap) <- c(
+  "Mature (INS+, IAPP+)",
+  "Igf2+",
+  "Immature (FEV+)",
+  "Beta subpopulation 2 and 4 (CD9+)",
+  "Proliferating (MKI67+)",
+  "Polyhormonal (GCG+)",
+  "Polyhormonal (SST+)"
+)
+
+bcells$Sorted@meta.data$cell_type <- factor(bcells$Sorted@meta.data$cell_type, levels = names(colmap))
+
+
+mat_vs_ph <- c(
+  "Mature (INS+, IAPP+)" = "Maturing",
+  "Igf2+" = "Maturing",
+  "Immature (FEV+)" = "Maturing",
+  "Beta subpopulation 2 and 4 (CD9+)" = "Maturing",
+  "Proliferating (MKI67+)" = "Maturing",
+  "Polyhormonal (GCG+)" = "Polyhormonal",
+  "Polyhormonal (SST+)" = "Polyhormonal"
+)
+
+bcells$Sorted@meta.data$mat_ph <- mat_vs_ph[bcells$Sorted@meta.data$cell_type]
+```
+
+
+```{r}
+plt <- plot_feature(bcells$Sorted, "cell_type", .cols = colmap) 
+
+dir.create(file.path("general_tsnes", "Sorted"))
+save_plot(file.path("general_tsnes", "Sorted", "cell_labels.pdf"), plt,
+          base_aspect_ratio = 2)
+
+# make a general polyhormonal versus mature
+
+plt <- plot_feature(bcells$Sorted, "mat_ph", 
+                    .cols = unname(colmap[c(1, length(colmap))]))
+
+save_plot(file.path("general_tsnes", "Sorted", "mature_vs_polyhormonal.pdf"), plt,
+          base_aspect_ratio = 1.5)
+
+
+dir.create(file.path("general_tsnes", "Sorted"))
+save_plot(file.path("general_tsnes", "Sorted", "cell_labels.pdf"), plt,
+          base_aspect_ratio = 2)
+
+plt <- plot_feature(bcells$Sorted, "res.0.5",
+             label_text = TRUE,
+             label_color = "Black") +
+  theme(legend.position = "none")
+
+save_plot(file.path("general_tsnes", 
+                    "Sorted", 
+                    "cluster_labels.pdf"), plt,
+          base_aspect_ratio = 1.2)
+```
+
+```{r}
+plot_feature(bcells$Reaggregated, "res.0.5",
+             label_text = TRUE,
+             label_color = "Black")
+```
+
+
+
+
+```{r}
+reagg_ids_to_names <- c(
+  "1" = "Polyhormonal (GCG+)",
+  "4" = "Immature (FEV+)",
+  "5" = "Immature (FEV+)",
+  "2" = "Immature (VIM+)",
+  "3" = "Mature (INS+)",
+  "0" = "Mature (INS+, IAPP+)",
+  "6" = "Polyhormonal (SST+)",
+  "7" = "Unknown celltype"
+)
+
+bcells$Reaggregated@meta.data$cell_type <- reagg_ids_to_names[bcells$Reaggregated@meta.data$res.0.5]
+
+```
+
+```{r}
+markers <- map(bcells, 
+    function(sobj){
+      sobj <- SetAllIdent(sobj, "cell_type")
+      markers <- FindAllMarkers(sobj,
+                          only.pos = TRUE,
+                          min.pct = 0.05,
+                          logfc.threshold = 0.25,
+                          return.thresh = 0.05)
+      markers
+    }
+)
+
+imap(markers, ~write_tsv(.x, 
+                         file.path("marker_tables", 
+                                   paste0(.y, "_markers_cell_type.txt"))))
+
+iwalk(markers, 
+    function(x, id) {
+      y <- split(x, x$cluster)
+      openxlsx::write.xlsx(y, file.path("marker_tables",
+                                        paste0(id,
+                                               "_markers_cell_type.xlsx")))})
+```
+
+```{r}
+plt <- plot_feature(bcells$Reaggregated, "cell_type") 
+
+dir.create(file.path("general_tsnes", "Reaggregated"))
+save_plot(file.path("general_tsnes", "Reaggregated", "cell_labels.pdf"), plt,
+          base_aspect_ratio = 1.6)
+
+plt <- plot_feature(bcells$Reaggregated, "res.0.5",
+             label_text = TRUE,
+             label_color = "Black") +
+  theme(legend.position = "none")
+
+save_plot(file.path("general_tsnes", 
+                    "Reaggregated", 
+                    "cluster_labels.pdf"), plt,
+          base_aspect_ratio = 1.2)
+```
+
+```{r}
+iwalk(bcells, ~saveRDS(.x, paste0(.y, ".rds")))
+```
+
+
+## Single tsnes
+
+```{r}
+dir.create("general_tsnes", showWarnings = F)
+
+genes <- c("egfp", "CD9", "ST8SIA1", "CFAP126", "ENTPD3")
+walk(genes, 
+    function(x) {
+      plt <- plot_feature(bcells$Sorted, x, pt_alpha = 1)
+      save_plot(file.path("general_tsnes/Sorted",
+                          paste0(x, ".pdf")),
+                plt,
+                base_aspect_ratio = 1.2)
+      plt <- plot_feature(bcells$Reaggregated, x, pt_alpha = 1)
+      save_plot(file.path("general_tsnes/Reaggregated/",
+                          paste0(x, ".pdf")),
+                plt, 
+                base_aspect_ratio = 1.2)
+      })
+               
+other_features <- "proportion_mito"
+
+walk(other_features, 
+    function(x) {
+      plt <- plot_feature(bcells$Sorted, x, pt_alpha = 1)
+      save_plot(file.path("general_tsnes/Sorted",
+                          paste0(x, ".pdf")),
+                plt,
+                base_aspect_ratio = 1.2)
+      plt <- plot_feature(bcells$Reaggregated, x, pt_alpha = 1)
+      save_plot(file.path("general_tsnes/Reaggregated/",
+                          paste0(x, ".pdf")),
+                plt, 
+                base_aspect_ratio = 1.2)
+      })
+```
+
+## GEO output
+
+```{r}
+expts <- c("Sorted", "Reaggregated")
+
+bcells <- map(expts, 
+     ~readRDS(paste0(., ".rds")))
+
+bcells <- map(bcells, UpdateSeuratObject)
+
+names(bcells) <- expts
+
+vec <- brewer.pal(9, "RdYlGn")
+n <- 7
+colmap <- get_high_low(vec, 7)
+names(colmap) <- c(
+  "Mature (INS+, IAPP+)",
+  "Igf2+",
+  "Immature (FEV+)",
+  "Beta subpopulation 2 and 4 (CD9+)",
+  "Proliferating (MKI67+)",
+  "Polyhormonal (GCG+)",
+  "Polyhormonal (SST+)"
+)
+
+bcells$Sorted@meta.data$cell_type <- factor(bcells$Sorted@meta.data$cell_type, levels = names(colmap))
+
+
+mdata_all <- map(bcells, get_metadata)
+
+geo_outdir <- "GEO"
+dir.create(geo_outdir)
+
+imap(mdata_all,
+     ~ write_tsv(.x,
+                 file.path(geo_outdir,
+                           str_c(.y, ".tsv.gz"))))
+```
+
+## Pseudotime
+
+```{r libs, message=FALSE, warning=FALSE}
+library(monocle)
+tcols <- rev(brewer.pal(11, "RdGy")[c(1:5, 7)])[c(1,6)]
+
+b_markers <- map(expts, 
+                 ~read_tsv(file.path(results_dir, 
+                            "2018-12-19_figs", 
+                            "marker_tables",
+                            str_c(.x, "_markers.txt"))))
+
+```
+
+
+```{r, eval = FALSE}
+run_monocle <- function(obj, markers, id, 
+                        reverse = FALSE){
+  
+  atm <- importCDS(obj)
+  atm <- estimateSizeFactors(atm)
+  atm <- estimateDispersions(atm)
+
+  atm <- setOrderingFilter(atm,
+                           ordering_genes = markers)
+  
+  atm <- reduceDimension(atm, method = 'DDRTree')
+  
+  atm <- orderCells(atm)
+  
+  if(reverse){
+    atm <- orderCells(atm, reverse = TRUE)
+  }
+  
+  saveRDS(atm, str_c(id, "_pt.rds"))
+  
+  atm
+}
+
+atms <- pmap(list(bcells, 
+                  b_markers, 
+                  expts,
+                  c(FALSE, TRUE)), 
+             function(obj, markers, expt, rev_trajectory){
+               markers <- filter(markers, p_val < 0.05) %>% 
+                 pull(gene) %>% 
+                 unique()
+               run_monocle(obj, markers, 
+                           expt, rev_trajectory)
+               }
+             )
+
+```
+
+```{r}
+atms <- map(expts, ~readRDS(paste0(.x, "_pt.rds")))
+names(atms) <- expts
+
+pData(atms$Sorted)$cell_type <- factor(pData(atms$Sorted)$cell_type,
+                                       levels = names(colmap))
+```
+
+```{r}
+dir.create("pseudotime")
+map(atms, ~plot_cell_trajectory(.x, color_by = "Pseudotime") +
+    scale_colour_viridis(discrete = F))
+
+map(atms, ~plot_cell_trajectory(.x, color_by = "res.0.5") +
+    scale_colour_brewer(palette = "Paired"))
+
+plt <- plot_cell_trajectory(atms$Sorted, 
+                            color_by = "cell_type",
+                            show_branch_points = FALSE,
+                            cell_size = 0.5) +
+    scale_colour_manual(values = colmap, name = "")  +
+  theme(legend.position = "right")+
+  guides(colour = guide_legend(override.aes = list(size = 4))) +
+  theme_cowplot()
+
+save_plot(file.path("pseudotime", 
+                    "sorted_trajectory.pdf"), plt,
+          base_aspect_ratio = 2)
+
+
+plt <- plot_cell_trajectory(atms$Reaggregated, 
+                            color_by = "cell_type",
+                            show_branch_points = FALSE) +
+    scale_colour_brewer(palette = "Paired")  +
+  theme(legend.position = "right") +
+  theme_cowplot()
+
+save_plot(file.path("pseudotime",
+                    "reagg_trajectory.pdf"), plt,
+          base_aspect_ratio = 2)
+
+
+plt <- plot_cell_trajectory(atms$Sorted, 
+                            color_by = "Pseudotime",
+                            show_branch_points = FALSE) +
+    scale_colour_viridis(discrete = F) + 
+  theme(legend.position = "right")
+
+save_plot(file.path("pseudotime", 
+                    "sorted_ptime.pdf"), plt)
+
+
+plt <- plot_cell_trajectory(atms$Reaggregated, 
+                            color_by = "Pseudotime",
+                            show_branch_points = FALSE) +
+    scale_colour_viridis(discrete = F) + 
+  theme(legend.position = "right")
+
+save_plot(file.path("pseudotime",
+                    "reagg_ptime.pdf"), plt)
+```
+
+
+```{r}
+
+control_markers <- c(
+  "CD9",
+  "ST8SIA1",
+  "INS",
+  "NPY",
+  "KCNE4",
+  "HCN1",
+  "DAB1",
+  "ST8SIA1",
+  "HCN4",
+  "NEUROD1",
+  "SCGB2A1",
+  "KLHL1",
+  "SLC44A4"
+)
+other <- c(
+  "GCG", # alpha cells glucagon
+  "IAPP", # beta cells amylin,
+  "SST", #delta cells Somatostatin
+  "PPY", #PP cells  (gamma cells or F cells) pancreatic polypeptide
+  "GHRL" #Epsilon cells
+)
+
+map(other,
+    function(gene) {
+      plts <- map(atms, ~plot_cell_trajectory(.x, 
+                     markers = gene, 
+                     use_color_gradient = T, 
+                     option = "C", 
+                     cell_size =  0.75))
+      plot_grid(plotlist = plts)
+    }
+)
+```
+
+```{r}
+others <- c(
+  "egfp",
+  "ENTPD3"
+)
+
+map(others,
+    function(gene) {
+      plts <- map(atms, ~plot_cell_trajectory(.x, 
+                     markers = gene, 
+                     use_color_gradient = T, 
+                     option = "C", 
+                     cell_size =  0.75))
+      plot_grid(plotlist = plts)
+    }
+)
+```
+
+### Plot expression over pseudotime
+
+```{r}
+
+others <- c(
+  "egfp",
+  "ENTPD3"
+)
+
+plts <- map(atms, 
+            ~plot_genes_branched_pseudotime(.x[others, ],
+                     cell_size =  0.75))
+plts
+```
+
+### Plot psuedotime on tSNE
+
+```{r, eval = FALSE}
+
+bcells <- pmap(list(atms, 
+                    bcells, 
+                    expts),
+      function(x, y, z) {
+  
+  if(any(c("Pseudotime", "State") %in%
+                 colnames(y@meta.data))){
+     y@meta.data$Pseudotime <- NULL
+     y@meta.data$State <- NULL
+          }
+        
+  mdata <- pData(x) %>% 
+    tibble::rownames_to_column("cell") %>% 
+    left_join(tibble::rownames_to_column(y@meta.data, "cell"),
+            .) %>% 
+    dplyr::select(cell, Pseudotime, State) %>% 
+    tibble::column_to_rownames("cell")
+  
+
+  
+  y <- AddMetaData(y, mdata)
+
+  plot_feature(y, feature = "Pseudotime")
+
+  return(y)
+})
+```
+
+
+```{r}
+
+plt <- plot_feature(bcells$Sorted, 
+                    feature = "Pseudotime")
+plt
+
+
+save_plot(file.path("pseudotime",
+                    "sorted_ptime_tsne.pdf"), plt)
+
+plt <- plot_feature(bcells$Reaggregated,
+                    feature = "Pseudotime")
+plt
+
+save_plot(file.path("pseudotime",
+                    "reagg_ptime_tsne.pdf"), plt)
+
+plt <- plot_feature(bcells$Reaggregated,
+                    feature = "ENTPD3")
+plt
+```
+
+
+```{r, eval = FALSE}
+diff_test_res <- map(atms, 
+                     ~differentialGeneTest(.x,
+                                           fullModelFormulaStr = "~sm.ns(Pseudotime)"))
+
+
+diff_test_res[, c("gene_short_name", "pval", "qval")]
+
+```
+
+
+
+
+```{r}
+iwalk(bcells, ~saveRDS(.x, paste0(.y, ".rds")))
+```
+
+
+
+## Classify mature cells
+
+```{r}
+
+end_point_files <- c("Russ_GFP_Sort_markov_points.tsv",
+  "Russ_d36GFP_Reagg_markov_points.tsv")
+
+velocity_points <- map(end_point_files,
+                       ~read_tsv(file.path("velocity", 
+                                         .x)))
+names(velocity_points) <- expts
+# make cell id format match seurat objects
+velocity_points <- map(velocity_points,
+                       ~mutate(.x, 
+                               CellID = str_split(CellID,
+                                                   ":", 
+                                                  simplify = TRUE) %>% 
+                                 .[, 2] %>% 
+                                 str_sub(., end = -2L)))
+
+velocity_points <- map2(bcells, velocity_points, 
+                       function(sobj, df){
+                         mdata <- get_metadata(sobj)
+                         mdata <- left_join(mdata, df, 
+                                            by = c("cell" = "CellID")) 
+                         mdata <- as.data.frame(mdata)[, c("cell", 
+                                                  "endpoints",
+                                                  "startpoints")]
+                         
+                         rownames(mdata) <- mdata[["cell"]]
+                         mdata[, -1]
+                       })
+bcells <- map2(bcells, velocity_points, AddMetaData)
+```
+
+### impute missing start/endpoints using KNN
+
+The start and endpoint densities are estimated using a markov process on the transision probalities. This is done on a subset of the data, sampled uniformly from the emedding to prevent density driven problems. To project this data and use it for simple classification I will impute the start and endpoints using KNN imputation. 
+
+Algorithm, find the K neareast neighbors in PCA space, and impute using the weighted mean of the K nearest neighbors that have non NA values. 
+  
+```{r}
+library(RANN)
+
+
+impute_by_weighted_mean <- function(knn_obj, 
+                                    df_to_impute, 
+                                    k_non_na = 10){
+  # will assume that NA in the first column indicates to impute
+  # fine for this application.
+  
+  res <- vector(mode = "list", length = 10)
+  
+  for( i in 1:nrow(df_to_impute)){
+    
+    if(!is.na(df_to_impute[i, 1])){
+      # no need to impute, return values
+      res[[i]] <- df_to_impute[i, ]
+      next
+    }
+      # get knns and dists for idx (-1 is self)
+    nns <- knn_obj$nn.idx[i, -1]
+    nn_dists <- knn_obj$nn.dists[i, -1]
+    nns_data <- df_to_impute[nns, , drop = FALSE]
+    
+    # select the k closest non-NA containing neighbors
+    non_na <- which(!is.na(nns_data[, 1]))
+    nns <- nns[non_na[1:k_non_na]]
+    
+    nn_dists <- nn_dists[non_na[1:k_non_na]]
+    nns_data <- df_to_impute[nns, , drop = FALSE]
+      
+    vals <- sapply(nns_data, function(x) {weighted.mean(x,
+                                                nn_dists,
+                                                na.rm = TRUE)})
+    res[[i]] <- data.frame(t(vals), 
+                           row.names = rownames(df_to_impute)[i])
+  }
+  
+  # return original and imputed data.frame
+  res <- do.call(rbind, res)
+  colnames(res) <- paste0(colnames(res), "_imputed")
+  cbind(df_to_impute, res)
+}
+
+
+bcells <- map2(bcells, velocity_points,
+              function(sobj, data_to_impute){
+  
+  pca_space <- sobj@dr$pca@cell.embeddings
+
+  # get large number of nearest neighbors
+  knns <- nn2(pca_space, k = 100, eps = 0.0) 
+  
+  imputed_data <- impute_by_weighted_mean(knns, 
+                                          data_to_impute, 
+                                          k_non_na = 10)
+  
+  # set NA values in original data to 0, just for plotting original  versus imputed.
+  imputed_data[is.na(imputed_data)] <- 0
+  sobj <- AddMetaData(sobj, imputed_data)
+  sobj
+})
+
+cols_to_plot <- c("startpoints", 
+                  "startpoints_imputed",
+                  "endpoints",
+                  "endpoints_imputed")
+
+plts <- map(cols_to_plot, ~plot_feature(bcells$Sorted, .x))
+plt <- plot_grid(plotlist = plts)
+
+save_plot("knn_impute_start_end_points_k10.pdf", plt, nrow = 2, ncol = 2)
+
+
+plt_e <- plot_feature(bcells$Sorted,
+                      "endpoints_imputed", 
+                      legend_title = "RNA velocity\nendpoints")
+
+plts <- map(c("egfp",
+              "ENTPD3", 
+              "Pseudotime"),
+            ~plot_feature(bcells$Sorted, .x))
+
+plt <- plot_grid(plotlist = c(list(plt_e), plts))
+
+save_plot("ENTPD3_comparison_sorted.pdf", plt, nrow = 2, ncol = 2)
+
+
+
+plt_e <- plot_feature(bcells$Reaggregated,
+                      "endpoints_imputed", 
+                      legend_title = "RNA velocity\nendpoints")
+
+plts <- map(c("egfp",
+              "ENTPD3", 
+              "Pseudotime"),
+            ~plot_feature(bcells$Reaggregated, .x))
+
+plt <- plot_grid(plotlist = c(list(plt_e), plts))
+
+save_plot("ENTPD3_comparison_reagg.pdf", 
+          plt, nrow = 2, ncol = 2)
+```
+
+
+### Classify cells
+
+Ideally would like to classify mature b-like cells based on ENTPD3 expression. 
+
+
+```{r}
+class_features <- c(
+  "endpoints_imputed",
+  "egfp",
+  "cell_type",
+  "ENTPD3",
+  "Pseudotime"
+)
+
+plts <- map(class_features, ~plot_feature(bcells$Sorted, .x))
+plot_grid(plotlist = plts)
+
+
+
+plts <- imap(c(
+  "RNA velocity\nendpoints" = "endpoints_imputed",
+  "INS-eGFP" = "egfp",
+  "ENTPD3" = "ENTPD3"),
+            ~plot_feature(bcells$Sorted, .x,
+                          legend_title = .y))
+
+plt <- plot_grid(plotlist = plts,
+          nrow = 1, 
+          ncol = 3)
+
+save_plot("ENTPD3_comparison_sorted_simple.pdf", 
+          plt, 
+          nrow = 1, 
+          ncol = 3,
+          base_asp = 1.2)
+
+
+plts <- imap(c(
+  "RNA velocity\nendpoints" = "endpoints_imputed",
+  "INS-eGFP" = "egfp",
+  "ENTPD3" = "ENTPD3"),
+            ~plot_feature(bcells$Reaggregated, .x,
+                          legend_title = .y))
+
+plt <- plot_grid(plotlist = plts,
+          nrow = 1, 
+          ncol = 3)
+
+save_plot("ENTPD3_comparison_reagg_simple.pdf", 
+          plt, 
+          nrow = 1, 
+          ncol = 3,
+          base_asp = 1.2)
+```
+
+Segregate as follows:
+1) endpoints 
+
+```{r}
+
+
+mature_cells <- rownames(bcells$Sorted@meta.data)[bcells$Sorted@meta.data$cell_type == "Mature (INS+, IAPP+)"]
+
+# gfp_cells <- colnames(bcells$Sorted@data)[bcells$Sorted@data["egfp", ] > 0]
+# mature_gfp_cells <- intersect(mature_cells, gfp_cells)
+
+sub_obj <- SubsetData(bcells$Sorted, mature_cells)
+
+bcells$Sorted@meta.data$entpd3 <- ifelse(bcells$Sorted@data["ENTPD3", ] > 0 & bcells$Sorted@meta.data$cell_type == "Mature (INS+, IAPP+)",
+  "ENTPD3+", 
+  "ENTPD3-")
+
+plot_feature(bcells$Sorted, "entpd3")
+
+bcells$Sorted <- SetAllIdent(bcells$Sorted, "entpd3")
+mkrs <- FindMarkers(bcells$Sorted, "ENTPD3+", "ENTPD3-")
+
+
+DoHeatmap(sub_obj, 
+          genes.use = rownames(mkrs),
+          slim.col.label = T)
+
+
+# try reclustering...
+
+sub_obj <- ScaleData(sub_obj, 
+                     vars.to.regress = c("nUMI", "nGene"))
+sub_obj <- RunPCA(sub_obj, seed.use = 42)
+sub_obj <- RunTSNE(sub_obj, dims.use = 1:15, seed.use = 42)
+sub_obj <- FindClusters(sub_obj,
+                        resolution = 0.3, 
+                        dims.use = 1:15, random.seed = 42)
+TSNEPlot(sub_obj)
+plot_feature(sub_obj, "res.0.3")
+plot_feature(sub_obj, "ENTPD3")
+plot_feature(sub_obj, "endpoints_imputed")
+plot_feature(sub_obj, "egfp")
+
+mkrs <- FindMarkers(SetAllIdent(sub_obj, "res.0.3"),
+                    0,
+                    1,
+                    min.pct = 0.05, 
+                    logfc.threshold = 0.10)
+
+write_tsv(as_tibble(mkrs, rownames = "gene"),
+          "marker_tables/reclustered_sorted.tsv")
+mkr_tbl <- read_tsv("marker_tables/reclustered_sorted.tsv")
+
+openxlsx::write.xlsx(mkr_tbl, 
+                     file.path("marker_tables",
+                               "reclustered_sorted.xlsx"))
+
+plt_dat <- FetchData(sub_obj, rownames(mkrs)[1:100])
+
+plt_dat <- scale(plt_dat)
+
+pdf("reclustered_markers_heatmap.pdf", width = 14)
+Heatmap(plt_dat, name = "z-score",
+        show_row_dend = FALSE, 
+        show_column_dend = FALSE, 
+        show_row_names = FALSE,
+        split = sub_obj@meta.data$res.0.3)
+
+dev.off()
+```
+
+
+### Compare immature to mature Beta-like cells
+
+```{r}
+mat_v_immat_mkrs <- FindMarkers(SetAllIdent(bcells$Sorted,
+                                            "cell_type"),
+            ident.1 = "Mature (INS+, IAPP+)",
+            ident.2 = "Immature (FEV+)",
+            logfc.threshold = 0.1,
+            min.pct = 0.05)
+      
+      
+mat_v_immat_mkrs <- as_tibble(mat_v_immat_mkrs, rownames = "gene")
+```
+
+### Compare two mature clusters
+```{r}
+clust2_v_3_mkrs <- FindAllMarkers(SetAllIdent(bcells$Sorted,
+                                            "res.0.3"),
+                               min.pct = 0.1,
+                               genes.use = "ENTPD3",
+                          logfc.threshold = 0.1,
+                          return.thresh = 0.05)
+            
+clust2_v_3_mkrs <- as_tibble(clust2_v_3_mkrs, 
+                             rownames = "gene")
+```
+
+### markers of velocity endpoint
+
+```{r}
+
+bcells$Sorted@meta.data$endpoint_cluster <- ifelse(bcells$Sorted@meta.data$endpoints_imputed > 0.8,
+                                                   "endpoint", 
+                                                "not_endpoint")
+endpoint_markers <- FindMarkers(SetAllIdent(bcells$Sorted,
+                                  "endpoint_cluster"), 
+                   ident.1 = "endpoint",
+                  min.pct = 0.1,
+                   only.pos = T, 
+                    logfc.threshold = 0.25,
+                    return.thresh = 0.05)
+
+endpoint_markers <- as_tibble(endpoint_markers, 
+                             rownames = "gene")
+
+write_tsv(endpoint_markers,
+          "marker_tables/sorted_endpoint_markers.tsv")
+
+openxlsx::write.xlsx(endpoint_markers, "marker_tables/sorted_endpoint_markers.xlsx")
+
+### up and down regulated
+
+endpoint_markers <- FindMarkers(SetAllIdent(bcells$Sorted,
+                                  "endpoint_cluster"), 
+                   ident.1 = "endpoint",
+                    min.pct = 0.1,
+                   only.pos =  F, 
+                    logfc.threshold = 0.25,
+                    return.thresh = 0.05)
+
+endpoint_markers <- as_tibble(endpoint_markers, 
+                             rownames = "gene")
+
+endpts <- bcells$Sorted@meta.data$endpoint_cluster
+cts <- bcells$Sorted@meta.data$cell_type
+
+bcells$Sorted@meta.data$celltype_by_endpoint <- ifelse(
+  endpts == "endpoint" & cts == "Mature (INS+, IAPP+)",
+  "Mature Endpoint",
+  cts)
+                      
+write_tsv(endpoint_markers,
+          "marker_tables/sorted_endpoint_markers_up_down.tsv")
+
+openxlsx::write.xlsx(endpoint_markers, "marker_tables/sorted_endpoint_markers_up_down.xlsx")
+
+# remove egfp 
+endpoint_markers <- filter(endpoint_markers, gene != "egfp")
+endpoint_markers_up <- filter(endpoint_markers, avg_logFC > 0)[1:30, ]
+endpoint_markers_down <- filter(endpoint_markers, avg_logFC < 0)[1:30, ] %>% arrange(desc(p_val_adj))
+
+endpoint_markers_to_plot <- bind_rows(endpoint_markers_up,
+                                      endpoint_markers_down)
+
+ids <- c("Mature (INS+, IAPP+)", 
+  "Immature (FEV+)", 
+  "Mature Endpoint")
+
+pretty_names <- str_replace(ids, " ", "\n")
+
+names(pretty_names) <- ids
+
+subset_dat <- SubsetData(bcells$Sorted, 
+                         cells.use = WhichCells(
+                           SetAllIdent(bcells$Sorted,
+                                       "celltype_by_endpoint"),
+                           c("Mature (INS+, IAPP+)", 
+                "Immature (FEV+)", 
+                "Mature Endpoint")))
+
+subset_dat@meta.data$heatmap_ids <- pretty_names[subset_dat@meta.data$celltype_by_endpoint]
+
+pdf("endpoint_marker_heatmap.pdf", 
+    width = 10,
+    height = 7)
+
+DoHeatmap(SetAllIdent(subset_dat, "heatmap_ids"),
+          genes.use = endpoint_markers_to_plot$gene,
+          col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 8, 
+          group.cex = 8, 
+          remove.key = T,
+          draw.line = TRUE)
+
+dev.off()
+
+
+## up and downregulated genes compared to non-endpoint mature and immature b-cells
+
+subset_dat <- SubsetData(bcells$Sorted, 
+                         cells.use = WhichCells(SetAllIdent(bcells$Sorted,
+                                                            "cell_type"),
+                                                c("Mature (INS+, IAPP+)", "Immature (FEV+)")))
+
+subset_dat@meta.data$split_mature_by_endpoint <- ifelse(subset_dat@meta.data$endpoint_cluster == "endpoint",
+                                                        paste("Endpoint", subset_dat@meta.data$cell_type),
+                                                        paste("Not endpoint", subset_dat@meta.data$cell_type ))
+
+subset_dat <- SetAllIdent(subset_dat, "split_mature_by_endpoint")
+
+endpoint_markers_comp <- FindMarkers(subset_dat, 
+                   ident.1 = "Endpoint Mature (INS+, IAPP+)",
+                    min.pct = 0.10,
+                   only.pos =  FALSE, 
+                    logfc.threshold = 0.1,
+                    return.thresh = 0.05)
+
+endpoint_markers_comp <- as_tibble(endpoint_markers_comp, 
+                             rownames = "gene")
+
+
+plt_dat <- FetchData(bcells$Sorted, 
+                     endpoint_markers_comp$gene[1:30])
+
+DoHeatmap(SetAllIdent(bcells$Sorted, "cell_type"),
+          genes.use = endpoint_markers_comp$gene[1:30],
+           col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 2, 
+          group.cex =  6, 
+          remove.key = T,
+          draw.line = TRUE,
+          group.label.rot = TRUE)
+
+write_tsv(endpoint_markers_comp,
+          "marker_tables/sorted_endpoint_markers_v_imm_and_mature.tsv")
+
+openxlsx::write.xlsx(endpoint_markers_comp, "marker_tables/sorted_endpoint_markers_v_imm_and_mature.xlsx")
+
+```
+
+Find correlated genes to ENTPD3
+
+```{r, eval = FALSE}
+library(scran)
+out_df <- correlatePairs(bcells$Sorted@data,
+               per.gene = FALSE,
+               pairings = list(c("ENTPD3"),
+                               bcells$Sorted@var.genes),
+               subset.row = bcells$Sorted@var.genes)
+
+
+
+plt_dat <- FetchData(sub_obj, c("ENTPD3", out_df$gene2[1:100]))
+
+plt_dat <- scale(plt_dat)
+Heatmap(plt_dat, name = "z-score",
+        show_row_dend = FALSE, 
+        show_column_dend = FALSE, 
+        show_row_names = FALSE,
+        split = sub_obj@meta.data$res.0.3)
+```
+
+
+
+
+## Heatmaps
+
+Make a heatmap with top 20 markers from each population.
+
+```{r}
+
+b_markers <- map(expts, 
+                 ~read_tsv(file.path(results_dir, 
+                            "2018-12-19_figs", 
+                            "marker_tables",
+                            str_c(.x, "_markers_cell_type.txt"))))
+
+n_markers <- 20
+
+top_n_markers <- map(b_markers, 
+    ~group_by(.x, cluster) %>% 
+      arrange(p_val_adj, .by_group = TRUE) %>% 
+      slice(1:n_markers) %>% 
+      pull(gene))
+
+
+DoHeatmap(SetAllIdent(bcells$Sorted, "cell_type"),
+          genes.use = top_n_markers[[1]],
+           col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 2, 
+          group.cex =  6, 
+          remove.key = T,
+          draw.line = TRUE,
+          group.label.rot = TRUE)
+
+dir.create("heatmaps")
+pdf("heatmaps/sorted_markers.pdf", width = 14)
+DoHeatmap(SetAllIdent(bcells$Sorted, "cell_type"),
+          genes.use = top_n_markers[[1]],
+           col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 3, 
+          group.cex =  8, 
+          remove.key = T,
+          draw.line = TRUE,
+          group.label.rot = TRUE)
+dev.off()
+
+
+
+
+DoHeatmap(SetAllIdent(bcells$Reaggregated,
+                      "cell_type"),
+          genes.use = top_n_markers[[2]],
+           col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 2, 
+          group.cex =  6, 
+          remove.key = T,
+          draw.line = TRUE,
+          group.label.rot = TRUE)
+
+dir.create("heatmaps")
+pdf("heatmaps/reaggregated_markers.pdf", width = 14)
+DoHeatmap(SetAllIdent(bcells$Reaggregated,
+                      "cell_type"),
+          genes.use = top_n_markers[[2]],
+           col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 3, 
+          group.cex =  8, 
+          remove.key = T,
+          draw.line = TRUE,
+          group.label.rot = TRUE)
+dev.off()
+```
+
+### Additional heatmaps
+
+```{r}
+
+library(ComplexHeatmap)
+n_markers <- 10
+
+top_n_markers <- map(b_markers, 
+    ~group_by(.x, cluster) %>% 
+      arrange(p_val_adj, .by_group = TRUE) %>% 
+      slice(1:n_markers) %>% 
+      pull(gene))
+
+
+avg_expr <- AverageExpression(SetAllIdent(bcells$Sorted,
+                                          "cell_type"),
+                              use.scale = FALSE)
+
+avg_selected_expr <- t(scale(t(log1p(avg_expr[unique(top_n_markers[[1]]), ]))))
+
+colnames(avg_selected_expr) <- str_replace(colnames(avg_selected_expr),
+                                           " \\(", "\n\\(")
+hmap <- Heatmap(
+  avg_selected_expr,
+  name = "Z-score",
+  col = viridis(256),
+  cluster_columns = FALSE,
+  cluster_rows = FALSE,
+  row_names_gp = gpar(fontsize = 8),
+  row_names_side = "left",
+  heatmap_legend_param = list(
+    title_gp = gpar(fontsize = 8),
+    labels_gp = gpar(fontsize = 8),
+    legend_direction = "horizontal"
+  )
+)
+
+pdf("heatmaps/sorted_markers_averaged.pdf",
+    width = 5,
+    height = 10)
+draw(hmap, heatmap_legend_side = "top")
+dev.off()
+
+avg_expr <- AverageExpression(SetAllIdent(bcells$Reaggregated,
+                                          "cell_type"),
+                              use.scale = FALSE)
+
+avg_selected_expr <- t(scale(t(log1p(avg_expr[unique(top_n_markers[[2]]), ]))))
+
+hmap <- Heatmap(
+  avg_selected_expr,
+  name = "Z-score",
+  col = viridis(256),
+  cluster_columns = FALSE,
+  cluster_rows = FALSE,
+  row_names_gp = gpar(fontsize = 8),
+  row_names_side = "left",
+  heatmap_legend_param = list(
+    title_gp = gpar(fontsize = 8),
+    labels_gp = gpar(fontsize = 8),
+    legend_direction = "horizontal"
+  )
+)
+
+pdf("heatmaps/reaggregated_markers_averaged.pdf",
+    width = 5,
+    height = 10)
+draw(hmap, heatmap_legend_side = "top")
+dev.off()
+```
+
+
+
+```{r}
+iwalk(bcells, 
+     ~saveRDS(.x, paste0(.y, "_final.rds")))
+
+```
