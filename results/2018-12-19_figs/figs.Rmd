@@ -953,14 +953,6 @@ names(reagg_colmap) <- c(
 bcells$Reaggregated@meta.data$cell_type <- factor(bcells$Reaggregated@meta.data$cell_type, levels = names(reagg_colmap))
 
 mdata_all <- map(bcells, get_metadata)
-
-geo_outdir <- "GEO"
-dir.create(geo_outdir)
-
-imap(mdata_all,
-     ~ write_tsv(.x,
-                 file.path(geo_outdir,
-                           str_c(.y, ".tsv.gz"))))
 ```
 
 ## Pseudotime

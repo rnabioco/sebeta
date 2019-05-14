@@ -20,8 +20,8 @@ out_dir = "/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_figs/veloci
 velo_data_dir = "/Users/kriemo/Projects/sc_repos/sebeta/data/velocyto"
 
 loom_fn = os.path.join(velo_data_dir, sample_id, sample_id + ".loom")
-#metadata_fn = os.path.join("..", "GEO", "Reaggregated.tsv.gz")
-metadata_fn = os.path.join("/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_figs", "GEO", sample_type + ".tsv.gz")
+
+metadata_fn = os.path.join("/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_figs", "GEO", sample_type + "_metadata.tsv.gz")
 clustering_col_id = "res.0.5"
 clustering_col_id = "cell_type"
 hdf5_out_fn = sample_id + ".hdf5"
@@ -50,7 +50,7 @@ vlm.filter_cells(bool_array=keep_idx)
 col_df = pd.read_csv(os.path.join("/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_figs", sample_type + "_colorMap_with_commas.tsv"),
                      header = None, sep = "\t")
 
-from matplotlib.colors import hex2colorx
+from matplotlib.colors import hex2color
 
 cols = {}
 for i in range(col_df.shape[0]):
@@ -58,10 +58,7 @@ for i in range(col_df.shape[0]):
   cols[key] = hex2color(col_df.iloc[i, 1])
 
 
-#vlm.ca["Cluster"] = np.array([str(x) for x in mdata[clustering_col_id]])
 vlm.set_clusters(np.array([str(x) for x in mdata[clustering_col_id]]), cluster_colors_dict = cols)
-
-
 
 #add tSNE projections
 vlm.ca["TSNE1"] = np.array(mdata["tSNE_1"])
@@ -73,9 +70,6 @@ vlm.normalize("S", size=True, log=True)
 
 
 vlm.filter_cells(bool_array=vlm.initial_Ucell_size > np.percentile(vlm.initial_Ucell_size, 0.5))
-
-# get from seurat obj
-vlm.set_clusters(vlm.ca["Cluster"])
 
 vlm.score_detection_levels(min_expr_counts=30, min_cells_express=20)
 vlm.filter_genes(by_detection_levels=True)
@@ -166,7 +160,7 @@ vlm.plot_grid_arrows(quiver_scale="auto",
                      minlength=1.5,
                      plot_random=True,
                      scale_type="relative")
-                     scatter_kwargs_dict = {'alpha' : 1})
+              #       scatter_kwargs_dict = {'alpha' : 1})
 
 plt.savefig(os.path.join(out_dir, sample_id + "_vectorfield.pdf"))
 
@@ -303,6 +297,6 @@ plt.savefig(os.path.join(out_dir, sample_id + "_startpoint_distr_pub.pdf"), tran
 
 out_df["startpoints"] = diffused_n
 
-out_df.to_csv(os.path.join(outdir, sample_id + "_markov_points.tsv"),  sep = "\t", index = False)
+out_df.to_csv(os.path.join(out_dir, sample_id + "_markov_points.tsv"),  sep = "\t", index = False)
 
 #vlm.to_hdf5(hdf5_out_fn)
