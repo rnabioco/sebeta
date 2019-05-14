@@ -755,17 +755,19 @@ names(colmap) <- c(
 bcells$Sorted@meta.data$cell_type <- factor(bcells$Sorted@meta.data$cell_type, levels = names(colmap))
 
 
-mat_vs_ph <- c(
-  "Mature (INS+, IAPP+)" = "Maturing",
-  "Igf2+" = "Maturing",
-  "Immature (FEV+)" = "Maturing",
-  "Beta subpopulation 2 and 4 (CD9+)" = "Maturing",
-  "Proliferating (MKI67+)" = "Maturing",
-  "Polyhormonal (GCG+)" = "Polyhormonal",
-  "Polyhormonal (SST+)" = "Polyhormonal"
+reagg_colmap <- get_high_low(vec, 7)
+names(reagg_colmap) <- c(
+  "Mature (INS+)",
+  "Mature (INS+, IAPP+)",
+  "Immature (FEV+)",
+  "Immature (VIM+)",
+  "Polyhormonal (GCG+)",
+  "Polyhormonal (SST+)",
+  "Unknown celltype"
 )
 
-bcells$Sorted@meta.data$mat_ph <- mat_vs_ph[bcells$Sorted@meta.data$cell_type]
+bcells$Reaggregated@meta.data$cell_type <- factor(bcells$Reaggregated@meta.data$cell_type, levels = names(reagg_colmap))
+
 ```
 
 
@@ -851,7 +853,7 @@ iwalk(markers,
 ```
 
 ```{r}
-plt <- plot_feature(bcells$Reaggregated, "cell_type") 
+plt <- plot_feature(bcells$Reaggregated, "cell_type", , .cols = reagg_colmap) 
 
 dir.create(file.path("general_tsnes", "Reaggregated"))
 save_plot(file.path("general_tsnes", "Reaggregated", "cell_labels.pdf"), plt,
@@ -910,7 +912,7 @@ walk(other_features,
       })
 ```
 
-## GEO output
+## Reload Objects
 
 ```{r}
 expts <- c("Sorted", "Reaggregated")
@@ -937,6 +939,18 @@ names(colmap) <- c(
 
 bcells$Sorted@meta.data$cell_type <- factor(bcells$Sorted@meta.data$cell_type, levels = names(colmap))
 
+reagg_colmap <- get_high_low(vec, 7)
+names(reagg_colmap) <- c(
+  "Mature (INS+)",
+  "Mature (INS+, IAPP+)",
+  "Immature (FEV+)",
+  "Immature (VIM+)",
+  "Polyhormonal (GCG+)",
+  "Polyhormonal (SST+)",
+  "Unknown celltype"
+)
+
+bcells$Reaggregated@meta.data$cell_type <- factor(bcells$Reaggregated@meta.data$cell_type, levels = names(reagg_colmap))
 
 mdata_all <- map(bcells, get_metadata)
 
@@ -1009,6 +1023,9 @@ names(atms) <- expts
 
 pData(atms$Sorted)$cell_type <- factor(pData(atms$Sorted)$cell_type,
                                        levels = names(colmap))
+
+pData(atms$Reaggregated)$cell_type <- factor(pData(atms$Reaggregated)$cell_type,
+                                       levels = names(reagg_colmap))
 ```
 
 ```{r}
@@ -1035,9 +1052,11 @@ save_plot(file.path("pseudotime",
 
 plt <- plot_cell_trajectory(atms$Reaggregated, 
                             color_by = "cell_type",
-                            show_branch_points = FALSE) +
-    scale_colour_brewer(palette = "Paired")  +
+                            show_branch_points = FALSE,
+                           cell_size = 0.5) +
+    scale_colour_manual(values = reagg_colmap, name = "")  +
   theme(legend.position = "right") +
+  guides(colour = guide_legend(override.aes = list(size = 4))) +
   theme_cowplot()
 
 save_plot(file.path("pseudotime",
@@ -1300,7 +1319,7 @@ impute_by_weighted_mean <- function(knn_obj,
 bcells <- map2(bcells, velocity_points,
               function(sobj, data_to_impute){
   
-  pca_space <- sobj@dr$pca@cell.embeddings
+  pca_space <- sobj@reductions$pca@cell.embeddings
 
   # get large number of nearest neighbors
   knns <- nn2(pca_space, k = 100, eps = 0.0) 
@@ -1829,8 +1848,46 @@ dev.off()
 
 
 
+## Output
+
+```{r, embed_ptime}
+
+bcells <- map2(atms, bcells, 
+             function(cds, sobj){
+  mat <- t(monocle::reducedDimS(cds))
+  sobj[["ptime"]] <- CreateDimReducObject(
+    embeddings = mat,
+    key = "Pseudotime",
+    assay = NULL)
+  sobj
+})
+```
+
+
 ```{r}
 iwalk(bcells, 
      ~saveRDS(.x, paste0(.y, "_final.rds")))
+```
 
+## GEO output
+
+```{r}
+mdata_all <- map(bcells, get_metadata)
+
+geo_outdir <- "GEO"
+dir.create(geo_outdir)
+
+iwalk(mdata_all,
+     ~ write_tsv(.x,
+                 file.path(geo_outdir,
+                           str_c(.y, "_metadata.tsv.gz"))))
+
+iwalk(bcells, function(x, y){
+  x@assays$RNA@counts %>% 
+    as.matrix() %>% 
+    as.data.frame() %>% 
+    tibble::rownames_to_column("cell") %>% 
+    write_tsv(file.path(geo_outdir,
+                           str_c(y, "_counts.tsv.gz")))
+})
 ```

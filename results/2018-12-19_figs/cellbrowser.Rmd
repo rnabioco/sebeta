@@ -39,6 +39,7 @@ cols_to_keep <- c(
   `clusters` = "res.0.5",
   `cell_types` = "cell_type",
   `pseudotime` = "Pseudotime",
+  `pseudotime state` = "State", 
   `velocity endpoint probability` = "endpoints_imputed",
   `velocity startpoint probability` = "startpoints_imputed")
 
@@ -46,7 +47,7 @@ bcells <- map(bcells, function(sobj){
   sobj@meta.data <- sobj@meta.data[, cols_to_keep]
   colnames(sobj@meta.data) <- names(cols_to_keep)
   sobj@meta.data$cell_types <- str_replace(sobj@meta.data$cell_types, ",", "")
-  sobj <- SetAllIdent(sobj, "cell_types")
+  Idents(sobj) <- "cell_types"
   sobj
 })
 ```
@@ -57,8 +58,7 @@ Split into 2 objects and save rds files
 
 ```{r}
 outdir <- "cellbrowser"
-dir.create(outdir)
-
+dir.create(outdir, showWarnings = FALSE)
 
 # write out rds files with names listed in sobjs
 iwalk(bcells, ~saveRDS(.x, 
@@ -66,59 +66,65 @@ iwalk(bcells, ~saveRDS(.x,
                                  paste0(.y, ".rds"))))
 ```
 
-
-
-
 ## Set colors
+
 ```{r}
 
 ## default palette (see ../../R/globals.R)
 col_palette <- discrete_palette_default
 
-## make a names list that contains named vectors matching ids to colors
+# requested cell type palette
+vec <- brewer.pal(9, "RdYlGn")
+sorted_colmap <- get_high_low(vec, 7)
+names(sorted_colmap) <- c(
+  "Mature (INS+, IAPP+)",
+  "Igf2+",
+  "Immature (FEV+)",
+  "Beta subpopulation 2 and 4 (CD9+)",
+  "Proliferating (MKI67+)",
+  "Polyhormonal (GCG+)",
+  "Polyhormonal (SST+)"
+)
 
+
+reagg_colmap <- get_high_low(vec, 7)
+names(reagg_colmap) <- c(
+  "Mature (INS+)",
+  "Mature (INS+, IAPP+)",
+  "Immature (FEV+)",
+  "Immature (VIM+)",
+  "Polyhormonal (GCG+)",
+  "Polyhormonal (SST+)",
+  "Unknown celltype"
+)
 
 ## summarize per cluster annotations
-summary_annotations <- map(bcells, 
-                           ~group_by(.x@meta.data, 
-                                     clusters) %>% 
-  dplyr::summarize(cell_types = unique(cell_types),
-                   expt = unique(`experiment name`)) %>% 
-  as.data.frame())
+to_map <- c("cell_types", 
+            "clusters",
+            "experiment name", 
+            "pseudotime state")
 
-summary_annotations <- map(summary_annotations, 
-                           function(x){
-  rownames(x) <- x$clusters
-  x <- x[, -1, drop = FALSE]
-  x
-})
+col_maps <- map(bcells, ~as.list(.x@meta.data[, to_map]) %>%
+      map(~as.character(unique(.x))))
 
-col_maps <- map(summary_annotations, function(x) {
+col_maps <- map2(col_maps, list(sorted_colmap, reagg_colmap), 
+                 function(x, colmap){
+  res <- list()
+  res$cell_types <- colmap
   
-  cols <- list()
-  cell_types <- x$cell_types %>%
-                      unique() %>% 
-                      sort()
+  tmp <- col_palette[1:length(x$clusters)]
+  names(tmp) <- x$clusters
+  res$clusters <- tmp 
+
+  tmp <- col_palette[1:length(x$`experiment name`)]
+  names(tmp) <- x$`experiment name`
+  res$`experiment name` <- tmp 
   
-  expts <- x$expt %>%
-                      unique() %>% 
-                      sort()
+  tmp <- col_palette[1:length(x$`pseudotime state`)]
+  names(tmp) <- x$`pseudotime state`
+  res$`pseudotime state` <- tmp 
   
-  clusters <- rownames(x)
-  
-  cell_type_col_palette <- col_palette[1:length(cell_types)]
-  names(cell_type_col_palette) <- cell_types
-  
-  clusters_col_palette <- col_palette[1:length(clusters)]
-  names(clusters_col_palette) <- clusters
-  
-  expt_col_palette <- col_palette[1:length(expts)]
-  names(expt_col_palette) <- expts
-  
-  cols$cell_type <- cell_type_col_palette
-  cols$cluster <- clusters_col_palette
-  cols$expt <- expt_col_palette
-  cols
+  res
 })
 
 
@@ -126,34 +132,52 @@ imap(col_maps,
     ~map_dfr(.x, ~tibble(clusterName = str_replace(names(.x), ",", ""), 
                   color = .x)) %>% as.data.frame() %>% 
   write_csv(paste0(.y, "_colorMap.csv"), col_names = F, quote_escape = "none"))
+
+imap(col_maps, 
+    ~map_dfr(.x, ~tibble(clusterName = names(.x), 
+                  color = .x)) %>% as.data.frame() %>% 
+  write_tsv(paste0(.y, "_colorMap_with_commas.tsv"), col_names = F, quote_escape = "none"))
 ```
 
 
 Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
 
-```{bash}
-cd cellbrowser
-/miniconda3/bin/cbImportSeurat2 \
-  -i Sorted.rds \
-  -o Sorted \
-  -m \
-  -c "cell_types" 
-  
-/miniconda3/bin/cbImportSeurat2 \
-  -i Reaggregated.rds \
-  -o Reaggregated \
-  -m \
-  -c "cell_types" 
-  
+```{r}
+dir.create("cellbrowser/markers", recursive = TRUE)
+
+pwalk(list(bcells, names(bcells), c("seBCs", "eBCs")), function(x, id, type) {
+  cols <- colnames(x@meta.data)
+  names(cols) <- colnames(x@meta.data)
+
+  mkrs <- read_tsv(paste0("../2018-12-19_figs/marker_tables/",
+                          id, 
+                          "_markers_cell_type.txt")) %>% 
+  select(cluster, gene, p_val_adj, everything())
+
+  write_tsv(mkrs, paste0("cellbrowser/markers/", 
+                         id, "_markers.tsv"))
+
+  do.call(function(...) {ExportToCellbrowser(x, 
+                    dir = file.path("cellbrowser", id),
+                    dataset.name = type,
+                    reductions = c("tsne", "ptime"),
+                    markers.file = paste0("cellbrowser/markers/", 
+                                          id, 
+                                          "_markers.tsv"),
+                    cluster.field = "cell_types",
+                    ...)}, 
+        as.list(cols))
+})
 ```
 
 
+
 ```{bash}
 cd cellbrowser
 
-echo -e '\ncolors="/Users/kriemo/Projects/russ/results/2018-12-19_figs/Sorted_colorMap.csv"' >> Sorted/cellbrowser.conf
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_figs/Sorted_colorMap.csv"' >> Sorted/cellbrowser.conf
 
-echo -e '\ncolors="/Users/kriemo/Projects/russ/results/2018-12-19_figs/Reaggregated_colorMap.csv"' >> Reaggregated/cellbrowser.conf
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_figs/Reaggregated_colorMap.csv"' >> Reaggregated/cellbrowser.conf
 ```
 
 

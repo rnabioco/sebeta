@@ -48,11 +48,11 @@ get_metadata <- function(obj, embedding = "tsne") {
 
   mdata <- as_tibble(obj@meta.data, rownames = "cell")
 
-  if(!embedding %in% names(obj@dr)){
+  if(!embedding %in% names(obj@reductions)){
     stop(paste0(embedding, " not found in seurat object"), call. = FALSE)
   }
 
-  embed_dat <- obj@dr[[embedding]]@cell.embeddings %>%
+  embed_dat <- obj@reductions[[embedding]]@cell.embeddings %>%
     as.data.frame() %>%
     tibble::rownames_to_column("cell")
 
