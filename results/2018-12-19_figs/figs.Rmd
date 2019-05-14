@@ -1890,4 +1890,9 @@ iwalk(bcells, function(x, y){
     write_tsv(file.path(geo_outdir,
                            str_c(y, "_counts.tsv.gz")))
 })
+
+
+map(dir(geo_outdir, full.names = T), tools::md5sum) %>% 
+  map_dfr(., 
+          ~data.frame(file = names(.x), md5 = .x))
 ```
