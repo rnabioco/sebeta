@@ -72,6 +72,8 @@ pdata <- data.frame(row.names = colnames(fc_matrix),
                                     "Pos",
                                     "Neg"))
 
+write_tsv(fc_matrix %>% as.data.frame() %>% tibble::rownames_to_column("gene"), "count_matrix_entpd3.tsv.gz")
+
 dds <- DESeqDataSetFromMatrix(fc_matrix, pdata, ~entpd3 )
 dds <- DESeq(dds)
 res <- results(dds)
@@ -84,7 +86,7 @@ deseq2_gene_level <- res_tidy %>%
   dplyr::select(gene_name, log2FoldChange, padj,
                 everything(), gene_id = row)
 
-write_tsv(deseq2_gene_level, "deseq2_gene_level.tsv")
+write_tsv(deseq2_gene_level, "deseq2_gene_level_entpd3.tsv.gz")
 
 deseq2_gene_level
 
@@ -123,7 +125,7 @@ readme_sheet <- list(README = readme_sheet)
 names(readme_sheet) <- "README"
 
 output <- c(readme_sheet, list(results = deseq2_gene_level))
-openxlsx::write.xlsx(output, "deseq2_results.xlsx")
+openxlsx::write.xlsx(output, "deseq2_results_entpd3.xlsx")
 
 ```
 
@@ -231,7 +233,7 @@ dev.off()
 
 
 pdf("heatmap_top50_up_and_down_no_row_clustering.pdf",
-    width = 5,
+    width = 7,
     height = 14)
 
 hmap <- Heatmap(mat, 
@@ -250,7 +252,7 @@ hmap
 
 ### GO terms
 ```{r, eval = F}
-res <- readxl::read_excel("deseq2_results.xlsx",
+res <- readxl::read_excel("deseq2_results_entpd3.xlsx",
                           sheet = 2)
 
 filter(res, padj < 0.01) %>% 
@@ -266,7 +268,7 @@ https://biit.cs.ut.ee/gprofiler/gost?organism=hsapiens&query=ENTPD3%0AWSCD2%0ASL
 
 ```{r}
 library(cowplot)
-gprofiler_res <- read_csv("gProfiler_res.csv")
+gprofiler_res <- read_csv("gProfiler_res_entpd3.csv")
   
 plt_dat <- group_by(gprofiler_res, source) %>% 
   arrange(adjusted_p_value, .by_group = T) %>% 
@@ -298,20 +300,16 @@ p <- ggplot(plt_dat, aes(term_name_short, negative_log10_of_adjusted_p_value)) +
   geom_col(aes(fill = source), color = "black") +
   coord_flip() +
   facet_wrap(~source, drop = T, scales = "free_y", ncol = 1) +
-  scale_fill_brewer(palette = "Paired") + 
+  scale_fill_brewer(palette = "Greys", direction = -1) + 
   labs(x = "",
        y = "-log10(adjusted pvalue)") + 
   theme_cowplot() +
   theme(legend.pos = "none")
 
-save_plot("Go_term_enrichment.pdf", p, nrow = 2.2, ncol = 1, base_asp = 2)
+save_plot("Go_term_enrichment_entpd3.pdf", p, nrow = 2.2, ncol = 1, base_asp = 2)
 ```
 
 ## Older day 23 v day 30 dataset
-
-
-
-
 
 ````{r dirs}
 proj_dir <- here()
@@ -363,6 +361,8 @@ pdata <- data.frame(row.names = colnames(fc_matrix),
                                        "_rep", 
                                        simplify = TRUE) %>% .[, 1])
 
+write_tsv(fc_matrix %>% as.data.frame() %>% tibble::rownames_to_column("gene"), "count_matrix_d23_d30.tsv.gz")
+
 dds <- DESeqDataSetFromMatrix(fc_matrix, pdata, ~ day )
 dds <- DESeq(dds)
 res <- results(dds)
@@ -375,7 +375,7 @@ deseq2_gene_level <- res_tidy %>%
   dplyr::select(gene_name, log2FoldChange, padj,
                 everything(), gene_id = row)
 
-write_tsv(deseq2_gene_level, "deseq2_gene_level_d23_d30.tsv")
+write_tsv(deseq2_gene_level, "deseq2_gene_level_d23_d30.tsv.gz")
 
 deseq2_gene_level
 
@@ -533,6 +533,69 @@ dev.off()
 
 hmap
 ```
+
+
+### GO terms
+```{r, eval = F}
+res <- readxl::read_excel("deseq2_results_d23_d30.xlsx",
+                          sheet = 2)
+
+filter(res, padj < 0.01) %>% 
+  pull(gene_name) %>% 
+  clipr::write_clip()
+
+```
+
+
+```
+https://biit.cs.ut.ee/gprofiler/gost?organism=hsapiens&query=ECEL1%0ACAMK2A%0ASPP1%0AENTPD3%0ASMAD9%0AOLFM4%0ARASGRF1%0AID2%0AGC%0AOLFM1%0AFSTL4%0ASEMA3C%0APCDH10%0AGPC3%0ACYP1A1%0AJAKMIP1%0AZDHHC8P1%0AIGDCC4%0AFCHSD1%0ASLC16A9%0ARSAD2%0AENC1%0AKCNJ8%0AADAMTS1%0AC4orf50%0ASMAD6%0ASERPINA1%0AEPHA5%0ASEMA5A%0ACYP1B1%0AKCNH5%0ACLU%0ACACNA1E%0ADPEP1%0ANDRG1%0AUSP54%0ACDKN1C%0AMAT1A%0ALINC01238%0APXDN%0ATTR%0ARGS1%0APREX2%0AKCTD16%0AMAMDC4%0APGR%0AACSM3%0ANOS1AP%0AAHRR%0AGRIA4%0ANXPH4%0ATSPEAR%0ALBH%0AAIF1%0ACADM1%0AROBO2%0AMPP6%0ADNAJC22%0ACKM%0AIL17RB%0AASCL1%0AVTN%0ATSHZ2%0ACLTCL1%0AFLNC%0AGNG3%0ATHBS4%0APPP2R2C%0ACPXM1%0AESYT1%0ARIMS3%0APLTP%0ACCBE1%0APTCHD4%0AADAMTS9%0ADCHS1%0AHCN1%0ARGS2%0AEPHA3%0ARP11-723O4.6%0ACRB2%0ACD36%0AID1%0ASPEG%0APLIN2%0ATMEM132B%0AGADD45B%0ASLC26A7%0ASLC17A1%0ATESC%0ARERG%0ASAPCD2%0AACVRL1%0AAMOTL1%0AABCC9%0ACLDN6%0ANDNF%0ASCUBE2%0AFXYD2%0APTHLH%0ALARGE1%0ASCD5%0ASNTG1%0ACHD5%0AHTR1B%0AOSR2%0AMYO1A%0AC1QL1%0ALRRTM4%0AESR1%0ANWD1%0AKCNAB1%0ASEMA3A%0ASOX21%0ALRRN1&ordered=true&all_results=false&no_iea=false&combined=false&measure_underrepresentation=false&domain_scope=annotated&significance_threshold_method=g_SCS&user_threshold=0.05&numeric_namespace=ENTREZGENE_ACC&sources=GO:MF,GO:CC,GO:BP,KEGG,TF,REAC,MIRNA,HPA,CORUM,HP,WP&background=
+```
+
+```{r}
+library(cowplot)
+gprofiler_res <- read_csv("gProfiler_res_d23_d30.csv")
+  
+plt_dat <- group_by(gprofiler_res, source) %>% 
+  arrange(adjusted_p_value, .by_group = T) %>% 
+  dplyr::slice(1:10) %>% 
+  ungroup()
+
+rename_go <- c(
+ # "GO:MF"= "Molecular Function",
+#  "GO:CC"= "Cellular Component",
+  "GO:BP" = "Biological Process"
+ # "TF" = "TF binding"
+)
+
+plt_dat <- filter(plt_dat,
+                  source %in% names(rename_go)) %>% 
+                  mutate(
+                  term_name_short = ifelse(str_count(term_name, " ") >= 6,
+                                           word(term_name, 1, 6),
+                                           term_name),
+                  term_name_short = str_remove(term_name_short, "^Factor: "),
+                  source = rename_go[source])
+
+plt_dat$term_name_short <- factor(plt_dat$term_name_short, 
+                                  levels = rev(plt_dat$term_name_short))
+
+
+
+p <- ggplot(plt_dat, aes(term_name_short, negative_log10_of_adjusted_p_value)) +
+  geom_col(aes(fill = source), color = "black") +
+  coord_flip() +
+  facet_wrap(~source, drop = T, scales = "free_y", ncol = 1) +
+  scale_fill_brewer(palette = "Greys", name = "", direction = -1)
+  labs(x = "",
+       y = "-log10(adjusted pvalue)") + 
+  theme_cowplot() +
+  theme(legend.pos = "none")
+
+save_plot("Go_term_enrichment_d23_d30.pdf", p, nrow = 1, ncol = 1, base_asp = 2)
+```
+
+
+
 
 ```{r, eval = F}
 
