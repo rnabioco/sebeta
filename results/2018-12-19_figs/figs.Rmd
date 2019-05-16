@@ -399,7 +399,7 @@ gc()
 
 ```{r}
 cca <- readRDS("sobj_cca.rds")
-
+cca <- UpdateSeuratObject(cca)
 cca@meta.data$expt_id <- ifelse(cca@meta.data$expt == "Russ_GFP_Sort",
                                 "Sorted",
                                 "Reaggregated")
@@ -513,8 +513,6 @@ save_plot("general_tsnes/cca/egfp_tsne.pdf",
 genes <- c("FEV",
   "SST",
   "GCG",
-  "ENTPD3",
-  "egfp",
   "IAPP",
   "INS",
   "IGF2"
@@ -522,10 +520,10 @@ genes <- c("FEV",
 
 plts <- map(genes, ~plot_feature(cca, .x))
 
-plt <- plot_grid(plotlist = plts, nrow = 4, 
-                 ncol = 2)
+plt <- plot_grid(plotlist = plts, nrow = 2, 
+                 ncol = 3)
 
-save_plot("general_tsnes/cca/cca_gene_tsne.pdf", plt, nrow = 4, ncol = 2)
+save_plot("general_tsnes/cca/cca_gene_tsne.pdf", plt, base_asp = 1.2, nrow = 2, ncol = 3)
 ```
 
 
@@ -954,7 +952,19 @@ bcells$Reaggregated@meta.data$cell_type <- factor(bcells$Reaggregated@meta.data$
 
 mdata_all <- map(bcells, get_metadata)
 ```
+## score cell cycle
 
+```{r}
+bcells$Sorted <- CellCycleScoring(
+  object = bcells$Sorted,
+  g2m.features = cc.genes$g2m.genes,
+  s.features = cc.genes$s.genes
+)
+
+plot_feature(bcells$Sorted, "Phase")
+bcells$Sorted$CC.Difference <- bcells$Sorted$S.Score - bcells$Sorted$G2M.Score
+
+```
 ## Pseudotime
 
 ```{r libs, message=FALSE, warning=FALSE}
@@ -1467,19 +1477,18 @@ save_plot("ENTPD3_comparison_sorted_simple.pdf",
 
 plts <- imap(c(
   "RNA velocity\nendpoints" = "endpoints_imputed",
-  "INS-eGFP" = "egfp",
-  "ENTPD3" = "ENTPD3"),
+  "INS-eGFP" = "egfp"),
             ~plot_feature(bcells$Reaggregated, .x,
                           legend_title = .y))
 
 plt <- plot_grid(plotlist = plts,
           nrow = 1, 
-          ncol = 3)
+          ncol = 2)
 
 save_plot("ENTPD3_comparison_reagg_simple.pdf", 
           plt, 
           nrow = 1, 
-          ncol = 3,
+          ncol = 2,
           base_asp = 1.2)
 ```
 
