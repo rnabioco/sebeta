@@ -553,6 +553,7 @@ https://biit.cs.ut.ee/gprofiler/gost?organism=hsapiens&query=ECEL1%0ACAMK2A%0ASP
 
 ```{r}
 library(cowplot)
+theme_set(theme_cowplot())
 gprofiler_res <- read_csv("gProfiler_res_d23_d30.csv")
   
 plt_dat <- group_by(gprofiler_res, source) %>% 
@@ -585,11 +586,11 @@ p <- ggplot(plt_dat, aes(term_name_short, negative_log10_of_adjusted_p_value)) +
   geom_col(aes(fill = source), color = "black") +
   coord_flip() +
   facet_wrap(~source, drop = T, scales = "free_y", ncol = 1) +
-  scale_fill_brewer(palette = "Greys", name = "", direction = -1)
+  scale_fill_brewer(palette = "Greys", name = "", direction = 1) +
   labs(x = "",
        y = "-log10(adjusted pvalue)") + 
   theme_cowplot() +
-  theme(legend.pos = "none")
+  theme(legend.position = "none")
 
 save_plot("Go_term_enrichment_d23_d30.pdf", p, nrow = 1, ncol = 1, base_asp = 2)
 ```
@@ -597,7 +598,7 @@ save_plot("Go_term_enrichment_d23_d30.pdf", p, nrow = 1, ncol = 1, base_asp = 2)
 
 
 
-```{r, eval = F}
+```{r}
 
 genes_to_plot <- c(
     "ONECUT3",
@@ -647,5 +648,16 @@ Heatmap(log2mat, name = "Fold-Change\n(log2)",
                          "alpha cell\nidentity")),
         show_column_names = FALSE)
 dev.off()
+
+```
+
+
+Make bar plots
+
+
+```{r}
+
+
+
 
 ```

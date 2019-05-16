@@ -1214,7 +1214,67 @@ diff_test_res[, c("gene_short_name", "pval", "qval")]
 ```
 
 
+```{r, BEAM}
 
+
+to_keep <- rownames(pData(atms$Sorted))[which(pData(atms$Sorted)$State %in% c(1, 2, 9))]
+BEAM_res_bp_3 <- BEAM(atms$Sorted[, to_keep], branch_point = 3, cores = 3)
+
+genes_to_plot <- row.names(BEAM_res_bp_3[order(BEAM_res_bp_3$qval)[1:200], ])
+                        
+# branch point 3, used only states 1, 9, and 2)
+p <- plot_genes_branched_heatmap(atms$Sorted[genes_to_plot, to_keep],
+                                          branch_point = 3,
+                                          num_clusters = 3,
+                                          cores = 3,
+                                          use_gene_short_name = T, branch_labels = c("Main branch", "Proliferating"),
+                                          show_rownames = T, return_heatmap = T)
+
+pdf("pseudotime/sorted_branch_3_heatmap.pdf", height = 16, width = 8)
+  grid::grid.newpage()
+  grid::grid.draw(p$ph_res$gtable)
+dev.off()
+
+plot_cell_trajectory(atms$Sorted, markers= "PLAGL1", use_color_gradient = T, option = "C")
+
+
+BEAM_res_bp_2 <- BEAM(atms$Sorted, branch_states = c(7, 9), branch_point = 2, cores = 3)
+
+genes_to_plot <- row.names(BEAM_res_bp_2[order(BEAM_res_bp_2$qval)[1:200], ])
+                        
+# branch point 3, used only states 1, 9, and 2)
+p <- plot_genes_branched_heatmap(atms$Sorted[genes_to_plot, ],
+                                          branch_point = 2,
+                                          num_clusters = 3,
+                                          cores = 3,
+                                          use_gene_short_name = T, branch_labels = c("Proliferating", "Mature"),
+                                          show_rownames = T, return_heatmap = T)
+
+pdf("pseudotime/sorted_branch_2_heatmap.pdf", height = 16, width = 8)
+  grid::grid.newpage()
+  grid::grid.draw(p$ph_res$gtable)
+dev.off()
+
+plot_cell_trajectory(atms$Sorted, markers= "PCDH7", use_color_gradient = T, option = "C")
+
+
+
+plt <- plot_cell_trajectory(atms$Sorted, 
+                            color_by = "cell_type",
+                            show_branch_points = FALSE,
+                            cell_size = 0.5) +
+    scale_colour_manual(values = colmap, name = "")  +
+  theme(legend.position = "right", axis.line.x = element_blank()) +
+  guides(colour = guide_legend(override.aes = list(size = 4))) +
+  theme_cowplot() +
+  theme_void()
+
+plt
+save_plot(file.path("pseudotime", 
+                    "sorted_trajectory_noaxes.pdf"), plt,
+          base_aspect_ratio = 2)
+
+```
 
 ```{r}
 iwalk(bcells, ~saveRDS(.x, paste0(.y, ".rds")))
