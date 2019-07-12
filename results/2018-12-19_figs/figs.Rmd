@@ -908,6 +908,29 @@ walk(other_features,
                 plt, 
                 base_aspect_ratio = 1.2)
       })
+
+
+
+plts <- map(c("ENTPD3",
+              "INS", 
+              "ITGA1"),
+            ~plot_feature(bcells$Sorted, .x))
+
+plt <- plot_grid(plotlist = plts, nrow = 1, ncol = 3)
+
+save_plot("ENTPD3_ITGA1_comparison_sorted.pdf", plt, base_aspect_ratio = 1.2, nrow = 1, ncol = 3)
+
+
+
+plts <- map(c("ENTPD3",
+              "INS", 
+              "ITGA1"),
+            ~plot_feature(bcells$Reaggregated, .x))
+
+plt <- plot_grid(plotlist = plts, nrow = 1, ncol = 3)
+
+save_plot("ENTPD3_ITGA1_comparison_reagg.pdf", plt, base_aspect_ratio = 1.2, nrow = 1, ncol = 3)
+
 ```
 
 ## Reload Objects
@@ -952,6 +975,7 @@ bcells$Reaggregated@meta.data$cell_type <- factor(bcells$Reaggregated@meta.data$
 
 mdata_all <- map(bcells, get_metadata)
 ```
+
 ## score cell cycle
 
 ```{r}
@@ -963,6 +987,15 @@ bcells$Sorted <- CellCycleScoring(
 
 plot_feature(bcells$Sorted, "Phase")
 bcells$Sorted$CC.Difference <- bcells$Sorted$S.Score - bcells$Sorted$G2M.Score
+
+bcells$Reaggregated <- CellCycleScoring(
+  object = bcells$Reaggregated,
+  g2m.features = cc.genes$g2m.genes,
+  s.features = cc.genes$s.genes
+)
+
+plot_feature(bcells$Reaggregated, "Phase")
+bcells$Reaggregated$CC.Difference <- bcells$Reaggregated$S.Score - bcells$Reaggregated$G2M.Score
 
 ```
 ## Pseudotime
@@ -984,14 +1017,15 @@ b_markers <- map(expts,
 run_monocle <- function(obj, markers, id, 
                         reverse = FALSE){
   
-  atm <- importCDS(obj)
+  atm <- importCDS_v3(obj)
   atm <- estimateSizeFactors(atm)
   atm <- estimateDispersions(atm)
 
   atm <- setOrderingFilter(atm,
                            ordering_genes = markers)
   
-  atm <- reduceDimension(atm, method = 'DDRTree')
+  atm <- reduceDimension(atm, reduction_method = 'DDRTree', 
+                         residualModelFormulaStr = as.formula( '~S.Score + G2M.Score'))
   
   atm <- orderCells(atm)
   
@@ -999,7 +1033,7 @@ run_monocle <- function(obj, markers, id,
     atm <- orderCells(atm, reverse = TRUE)
   }
   
-  saveRDS(atm, str_c(id, "_pt.rds"))
+  saveRDS(atm, str_c(id, "_pt2.rds"))
   
   atm
 }

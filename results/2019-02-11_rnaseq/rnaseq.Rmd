@@ -40,6 +40,7 @@ data_dir <- file.path(proj_dir, "data", "rnaseq")
 salmon_dir <- file.path(data_dir, "salmon")
 fc_dir <- file.path(data_dir, "featurecounts")
 log_dir <- file.path(data_dir, "logs")
+source("../../R/globals.r")
 ```
 
 
@@ -127,7 +128,124 @@ names(readme_sheet) <- "README"
 output <- c(readme_sheet, list(results = deseq2_gene_level))
 openxlsx::write.xlsx(output, "deseq2_results_entpd3.xlsx")
 
+norm_matrix <- counts(dds, normalized = TRUE)
+
+norm_matrix <- norm_matrix %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("gene_id") %>% 
+  left_join(., gene2symbol, by = c("gene_id")) %>% 
+  dplyr::select(gene_id, gene_name,
+                everything())
+
+norm_matrix <- set_xlsx_class(norm_matrix, 
+                              col = c("gene_id", "gene_name"),
+                              "Text")
+
+readme_sheet <- data.frame(Description = c(
+  "DESeq2 normalized counts (using standard DESeq2 sizeFactor normalization)"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+output <- c(readme_sheet, list(normalized_counts = norm_matrix))
+openxlsx::write.xlsx(output, "deseq2_normalized_counts_entpd3.xlsx")
+
+
 ```
+
+#### Volcano plot
+
+```{r}
+library(ggrepel)
+
+genes_to_label <- c(
+  "ENTPD3",
+  "INS",
+  "FEV",
+  "NEUROD1"
+)
+
+df <- deseq2_gene_level
+
+plot_volcano <- function(df, 
+                         adj_p_cut_off = 0.05,
+                         genes_to_highlight = NULL,
+                         log2fc_col = "log2FoldChange",
+                         adj_pval_col = "padj",
+                         gene_col = "gene_name",
+                         query_cond = "ENTDP3+",
+                         ref_cond = "ENTPD3-") {
+  
+  df <- filter(df, !is.na(!!sym(adj_pval_col)))
+  df <- mutate(df, sig = !!sym(adj_pval_col) < adj_p_cut_off)
+  
+  sig_df <- filter(df, sig)
+  
+  n_up <- filter(sig_df, !!sym(log2fc_col) > 0) %>% nrow(.)
+  n_down <- filter(sig_df, !!sym(log2fc_col) < 0) %>% nrow(.)
+
+  n_up_str <- paste0(scales::comma(n_up), " up")
+  n_down_str <- paste0(scales::comma(n_down), " down")
+  
+  df <- mutate(df, log10pval = -log10(!!sym(adj_pval_col)))
+  
+  p <- ggplot(df, aes(!!sym(log2fc_col), log10pval)) +
+    geom_point(aes(color = sig), 
+               size = 0.5) +
+    scale_color_manual(values = c("black", "blue"),
+                       name = "") 
+  
+  if(!is.null(genes_to_highlight)){
+    text_df <- filter(df, !!sym(gene_col) %in% genes_to_highlight)
+    p <- p +  
+      geom_text_repel(data = text_df, 
+                      aes(label = !!sym(gene_col)),
+                      color = "red",
+                      arrow = arrow(length = unit(0.02, "npc")),
+                      box.padding = 1)
+  }
+  
+  ## annotate with number of genes up and down sig
+  
+  x_pos <- 0.6 * max(df[[log2fc_col]])
+  y_pos <- 0.99 * max(df[["log10pval"]])
+  
+  p <- p +
+    annotate("text",
+             label = n_up_str,
+             x = x_pos,
+             y = y_pos,
+             color = "black") +
+    annotate("text",
+             label = n_down_str,
+             x = -x_pos,
+             y = y_pos,
+             color = "black") 
+  
+  p <- p + 
+    labs(
+      x = substitute(paste("-log"[10]," adjusted p-value",sep="")),
+      y = substitute(paste("log"[2], 
+                           " ",
+                           frac(query_cond,
+                                ref_cond), sep=""))
+    )
+  
+  p <- p +
+    theme(legend.position = "none")
+  p
+}
+
+p <- plot_volcano(df, genes_to_highlight = genes_to_label)
+save_plot("volcano_plot_entdp3.pdf",
+          p,
+          base_asp = 1)
+```
+
+
+
+
 
 There are `r sum(sig_genes$log2FoldChange > 0)` upregulated genes and 
 `r sum(sig_genes$log2FoldChange < 0)` downregulated genes at an adjusted p-value of 0.05. 
@@ -232,7 +350,7 @@ hmap
 dev.off()
 
 
-pdf("heatmap_top50_up_and_down_no_row_clustering.pdf",
+pdf("entpd3_heatmap_top50_up_and_down_no_row_clustering.pdf",
     width = 7,
     height = 14)
 
@@ -241,7 +359,8 @@ hmap <- Heatmap(mat,
         name = "Z-Score",
         row_names_side = "left",
         row_names_gp = gpar(fontsize = 10),
-        cluster_rows = FALSE
+        cluster_rows = FALSE,
+        cluster_columns = hclust(dist(t(mat)))
         )
 hmap
 dev.off()
@@ -416,7 +535,57 @@ names(readme_sheet) <- "README"
 output <- c(readme_sheet, list(results = deseq2_gene_level))
 openxlsx::write.xlsx(output, "deseq2_results_d23_d30.xlsx")
 
+
+norm_matrix <- counts(dds, normalized = TRUE)
+
+norm_matrix <- norm_matrix %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("gene_id") %>% 
+  left_join(., gene2symbol, by = c("gene_id")) %>% 
+  dplyr::select(gene_id, gene_name,
+                everything())
+
+norm_matrix <- set_xlsx_class(norm_matrix, 
+                              col = c("gene_id", "gene_name"),
+                              "Text")
+
+readme_sheet <- data.frame(Description = c(
+  "DESeq2 normalized counts (using standard DESeq2 sizeFactor normalization)"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+output <- c(readme_sheet, list(normalized_counts = norm_matrix))
+openxlsx::write.xlsx(output, "deseq2_normalized_counts_d23_d30.xlsx")
+
+
+
 ```
+
+#### Volcano plot
+
+```{r}
+library(ggrepel)
+
+genes_to_label <- c(
+  "ENTPD3",
+  "INS",
+  "FEV",
+  "ROBO2"
+)
+
+p <- plot_volcano(deseq2_gene_level, 
+                  genes_to_highlight = genes_to_label,
+                  query_cond = "Day 30",
+                  ref_cond = "Day 23")
+
+save_plot("volcano_plot_d23_d30.pdf",
+          p,
+          base_asp = 1)
+```
+
+
 
 There are `r sum(sig_genes$log2FoldChange > 0)` upregulated genes and 
 `r sum(sig_genes$log2FoldChange < 0)` downregulated genes at an adjusted p-value of 0.05. 
@@ -526,7 +695,9 @@ hmap <- Heatmap(mat,
         name = "Z-Score",
         row_names_side = "left",
         row_names_gp = gpar(fontsize = 10),
-        cluster_rows = FALSE
+        cluster_rows = FALSE,
+        cluster_columns = hclust(dist(t(mat))),
+        row_order = top_n_genes_symbol
         )
 hmap
 dev.off()
@@ -651,13 +822,3 @@ dev.off()
 
 ```
 
-
-Make bar plots
-
-
-```{r}
-
-
-
-
-```
