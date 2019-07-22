@@ -822,3 +822,229 @@ dev.off()
 
 ```
 
+## Selected gene lists
+
+```{r lists}
+
+mouse_lists <- list(
+  MTOR = c("Mtor",
+    "Akt1",
+    "Igf1r",
+    "Igfr2",
+    "Rps6ka1",
+    "Rps6ka2",
+    "Rps6ka4",
+    "Pdk1",
+    "Eif4a3",
+    "Eif4ebp1",
+    "Eif4g1",
+    "Eif4h",
+    "Eif4b",
+    "Eifa3",
+    "Pik3r5",
+    "Ulk1",
+    "Ambra1",
+    "Rptor",
+    "Prkaa1",
+    "Ppp2ca",
+    "Fkbp1a",
+    "Fkbp1b",
+    "Mapk1"),
+ Mitochondrial = c("Atp5e",
+  "Atp6ap1",
+  "Cox5b",
+  "Cox6a2",
+  "Cox7b",
+  "Cyb5a",
+  "Ndufa3",
+  "Uqcrh",
+  "Uqcrq",
+  "Ppargc1a",
+  "Ppargcab")
+)
+
+human_lists <- list(
+  OX_PHOS = c("ATP4A",
+              "ATP5EP2",
+              "ATP6AP1L",
+              "ATP6V1A",
+              "COX5B",
+              "COX6A1",
+              "COX6A2",
+              "COX6B1",
+              "COX6C",
+              "COX7A2",
+              "COX7BP2",
+              "COX8A",
+              "CYB5A",
+              "NDUFA2",
+              "NDUFA3",
+              "NDUFB2",
+              "NDUFB3",
+              "NDUFC2",
+              "NDUFS2",
+              "NDUFS7",
+              "PPA1",
+              "TCIRG1",
+              "UQCRH",
+              "UQCRQ"),
+  INS_Secretion = c("KCNJ11",
+                    "GNAS",
+                    "INS",
+                    "FXYD2",
+                    "CACNA1D",
+                    "KCNMA1",
+                    "ADCY1",
+                    "ABCC8",
+                    "GLP1R",
+                    "PDX1",
+                    "GPR119",
+                    "SLC2A2",
+                    "ERO1B",
+                    "G6PC2",
+                    "VAMP2",
+                    "SNAP25",
+                    "MDH1",
+                    "NDUFS2"),
+  Ca2_binding = c("CAMK1D",
+                  "CAMKK1",
+                  "CAMKK2",
+                  "MEF2C",
+                  "MEF2D",
+                  "MYO7A",
+                  "NFATC1",
+                  "PCP4",
+                  "S100A1",
+                  "S100A13",
+                  "S100A4",
+                  "S100A6"),
+  Disallowed = c("HK1",
+                 "HK2",
+                 "LDHA",
+                 "SLC16A1",
+                 "ACOT7",
+                 "DNMT3A",
+                 "HBB",
+                 "RFX6"),
+  ETC = c("COQ9",
+          "COX15",
+          "COX5A",
+          "COX6A1",
+          "COX6B1",
+          "COX6CP10",
+          "COX7A2L",
+          "COX7B",
+          "COX7C",
+          "CYCS",
+          "DLD",
+          "ETFA",
+          "ETFDH",
+          "NDUFA1",
+          "NDUFA10",
+          "NDUFA12",
+          "NDUFA13",
+          "NDUFA4",
+          "NDUFA5",
+          "NDUFA9",
+          "NDUFB1",
+          "NDUFB11",
+          "NDUFB2",
+          "NDUFB3",
+          "NDUFB4",
+          "NDUFB5",
+          "NDUFB6",
+          "NDUFB9",
+          "NDUFS3",
+          "NDUFS4",
+          "NDUFS5",
+          "NDUFS6",
+          "NDUFV2",
+          "PMPCB",
+          "SDHB",
+          "SDHC",
+          "SLC25A12",
+          "SNCA",
+          "UQCR11",
+          "UQCRB",
+          "UQCRB",
+          "UQCRC1",
+          "UQCRC2",
+          "UQCRFS1",
+          "UQCRQ"),
+  TCA = c("PCK2",
+          "DLD",
+          "ACLY",
+          "PDHB",
+          "MDH2")
+)
+
+```
+
+
+
+
+
+
+
+```{r convert_to_human}
+biomart_query <- "http://www.ensembl.org/biomart/martview/67d79534a2e835c76926ee0cab5c4565?VIRTUALSCHEMANAME=default&ATTRIBUTES=mmusculus_gene_ensembl.default.homologs.ensembl_gene_id|mmusculus_gene_ensembl.default.homologs.ensembl_gene_id_version|mmusculus_gene_ensembl.default.homologs.ensembl_transcript_id|mmusculus_gene_ensembl.default.homologs.ensembl_transcript_id_version|mmusculus_gene_ensembl.default.homologs.hsapiens_homolog_ensembl_gene|mmusculus_gene_ensembl.default.homologs.hsapiens_homolog_associated_gene_name&FILTERS=&VISIBLEPANEL=resultspanel"
+
+orths <- read_tsv(file.path(docs_dir, "mouse_to_human.txt.gz"))
+
+ids2sym <- read_tsv(file.path(docs_dir, "mouse_id_to_sym.txt.gz"))
+
+mouse2human <- left_join(orths, ids2sym)
+
+mouse_lists <- map(mouse_lists,
+                   ~left_join(tibble(`Gene name` = .x),
+                              mouse2human, by = "Gene name") %>%
+                     pull(`Human gene name`) %>% 
+                     unique() %>%
+                     .[!is.na(.)])
+
+gene_lists <- c(mouse_lists, human_lists)
+```
+
+```{r}
+mat <- assay(dds_trans)
+
+# drop zero epxression
+mat <- mat[rowSums(mat) > 0, ]
+symbol_tbl <- left_join(tibble(gene_id = rownames(mat)),
+                         gene2symbol, by = "gene_id") %>% 
+  as.data.frame() %>% 
+  column_to_rownames("gene_id")
+
+rownames(mat) <- symbol_tbl[rownames(mat), "gene_name"]
+
+mat <- t(scale(t(mat)))
+
+
+outdir <- "d23_d30_gene_list_heatmaps"
+dir.create(outdir)
+
+imap(gene_lists,
+     function(genes, id){
+       to_plot <- intersect(rownames(mat), genes)
+       # to_plot <- intersect(to_plot, sig_genes$gene_name)
+       # 
+       # if(length(to_plot) < 2){
+       #   return(NULL)
+       # }
+
+       hmap <- Heatmap(mat[to_plot, ],
+               name = "Z-score",
+               column_title = paste0(id, " genes"),
+               cluster_columns = FALSE,
+               column_order = sort(colnames(mat)),
+       col = viridis::viridis(256),
+       row_names_side = "left",
+       row_names_gp = gpar(fontsize = 10))
+       pdf(file.path(outdir, paste0(id, ".pdf")))
+         draw(hmap)
+       dev.off()
+       hmap
+     })
+
+```
+
