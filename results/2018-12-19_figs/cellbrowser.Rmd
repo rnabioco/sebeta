@@ -187,6 +187,7 @@ cd cellbrowser
 /miniconda3/bin/cbBuild \
 -i Sorted/cellbrowser.conf \
 -i Reaggregated/cellbrowser.conf \
+-i ../../2019-05-23_public_data/cellbrowser/cellbrowser.conf \
 -o beta
 
 ```

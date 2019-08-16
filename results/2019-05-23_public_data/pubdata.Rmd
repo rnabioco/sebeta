@@ -1,0 +1,122 @@
+---
+title: "Public scRNA_seq data"
+author: "Kent Riemondy RBI"
+date: "`R Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+outdir <- "pub_data"
+dir.create(outdir)
+```
+
+
+```{r}
+urls <- c(
+  GSE114412_Stage_6.all.cell_metadata.tsv.gz = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE114412&format=file&file=GSE114412%5FStage%5F6%2Eall%2Ecell%5Fmetadata%2Etsv%2Egz",
+  GSE114412_Stage_6.all.processed_counts.tsv.gz = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE114412&format=file&file=GSE114412%5FStage%5F6%2Eall%2Eprocessed%5Fcounts%2Etsv%2Egz",
+  GSE114412_Stage_6.exo.cell_metadata.tsv.gz = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE114412&format=file&file=GSE114412%5FStage%5F6%2Eexo%2Ecell%5Fmetadata%2Etsv%2Egz",
+  GSE114412_Stage_6.raw_indrops_counts.tsv.gz = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE114412&format=file&file=GSE114412%5FStage%5F6%2Eraw%5Findrops%5Fcounts%2Etsv%2Egz",
+  GSE114412_Stage_6.scbeta_pseudotime.cell_metadata.tsv.gz = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE114412&format=file&file=GSE114412%5FStage%5F6%2Escbeta%5Fpseudotime%2Ecell%5Fmetadata%2Etsv%2Egz")
+
+
+download_file <- function(url, path, force = FALSE) {
+  if (!file.exists(path) || force){
+    download.file(url, path)
+  }
+}
+
+names(urls) <- file.path(outdir, names(urls))
+
+iwalk(urls, download_file)
+
+```
+
+
+
+```{r}
+dat <- map(names(urls)[2], read_tsv)
+dat <- as.data.frame(dat[[1]]) %>% 
+  tibble::column_to_rownames("# library.barcode") %>% 
+  as.matrix() %>% 
+  as(., "sparseMatrix") %>% 
+  t()
+mdat <- read_tsv(names(urls)[1], col_names = T) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("library.barcode") %>% 
+  .[colnames(dat), ]
+
+nrow(mdat) == nrow(na.omit(mdat))
+
+so <- CreateSeuratObject(dat, meta.data = mdat)
+
+tsne_embeddings <- so@meta.data[, c("tSNE_dim1", "tSNE_dim2")] %>% 
+  as.matrix() 
+colnames(tsne_embeddings) <- c("tSNE_1", "tSNE_2")
+so[["tsne"]] <- CreateDimReducObject(tsne_embeddings,
+                                     assay = "RNA",
+                                     key = "tSNE")
+
+
+so <- NormalizeData(so)
+```
+
+Tsne coordinates look the same as Fig. 2d. 
+
+```{r}
+TSNEPlot(so)
+
+Idents(so) <- "Assigned_cluster"
+TSNEPlot(so)
+
+FeaturePlot(so, c("ITGA1", "ENTPD3"))
+
+map(c("Assigned_cluster", "ITGA1", "ENTPD3"), 
+    ~plot_feature(so, .x)) %>% 
+  plot_grid(plotlist = ., ncol = 3) %>% 
+  save_plot("itga1_v_entpd3.pdf", ., ncol = 3, base_asp = 1.2)
+
+map(c("Assigned_cluster", "ITGA1", "ENTPD3"), 
+    ~plot_feature(so, .x)) %>% 
+  plot_grid(plotlist = ., ncol = 3) %>% 
+  save_plot("itga1_v_entpd3.png", ., ncol = 3, base_asp = 1.2)
+```
+
+ENTPD3 is not really even detectable...
+
+```{r}
+cbdir <- "cellbrowser"
+dir.create(cbdir, showWarnings = FALSE)
+
+so %>% 
+  ExportToCellbrowser(
+    .,
+    dir = cbdir,
+    dataset.name = "Melton_stage6",
+    reductions = "tsne",
+    skip.expr.matrix = TRUE,
+    cluster.field = "main_clusters",
+    Assigned_cluster = "main_clusters",
+    Assigned_subcluster = "sub_clusters",
+    Differentiation = "differentiation", 
+    CellWeek = "cell_week",
+    Lib_prep_batch = "batch"
+  )
+
+```
