@@ -31,6 +31,8 @@ library(readxl)
 library(jsonlite)
 library(rtracklayer)
 library(ggrepel)
+library(cowplot)
+theme_set(theme_cowplot())
 ```
 
 
@@ -166,7 +168,7 @@ genes_to_label <- c(
   "ITGA1"
 )
 
-df <- deseq2_gene_level
+df <- readxl::read_excel("deseq2_results_entpd3.xlsx", sheet = 2)
 
 plot_volcano <- function(df, 
                          adj_p_cut_off = 0.05,
@@ -238,11 +240,12 @@ plot_volcano <- function(df,
   
   p <- p + 
     labs(
-      x = substitute(paste("-log"[10]," adjusted p-value",sep="")),
-      y = substitute(paste("log"[2], 
+      x = substitute(paste("log"[2], 
                            " ",
                            frac(query_cond,
-                                ref_cond), sep=""))
+                                ref_cond), sep="")),
+      y = substitute(paste("-log"[10]," adjusted p-value",sep=""))
+
     )
   
   p <- p +
@@ -251,7 +254,7 @@ plot_volcano <- function(df,
 }
 
 p <- plot_volcano(df, genes_to_highlight = genes_to_label)
-save_plot("volcano_plot_entdp3.pdf",
+save_plot("volcano_plot_entdp3_updated.pdf",
           p,
           base_asp = 1)
 ```
