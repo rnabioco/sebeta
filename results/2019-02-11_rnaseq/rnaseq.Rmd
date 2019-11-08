@@ -164,7 +164,6 @@ library(ggrepel)
 genes_to_label <- c(
   "ENTPD3",
   "FEV",
-  "ROBO2",
   "ITGA1"
 )
 
@@ -227,12 +226,12 @@ plot_volcano <- function(df,
                       color = "red",
                       segment.color = "grey",
                       segment.size = 0.10,
-                      segement.alpha = 0.75,
+                      segment.alpha = 0.75,
                       min.segment.length = 0.005,
                     #  arrow = arrow(length = unit(0.02, "npc")),
-                     # box.padding = 0.75,
-                    #  point.padding = 1, 
-                      force = 2,
+                      box.padding = 0.75,
+                      point.padding = 1, 
+                      force = 0.01,
                       ylim = c(NA, y_pos * 0.975))
   }
   
