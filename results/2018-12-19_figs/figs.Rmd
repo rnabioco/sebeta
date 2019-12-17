@@ -1967,6 +1967,8 @@ iwalk(bcells,
 ## GEO output
 
 ```{r}
+bcells <- map(c("Sorted", "Reaggregated"), ~readRDS(paste0(.x, "_final.rds")))
+
 mdata_all <- map(bcells, get_metadata)
 
 geo_outdir <- "GEO"
@@ -1986,7 +1988,9 @@ iwalk(bcells, function(x, y){
                            str_c(y, "_counts.tsv.gz")))
 })
 
+```
 
+```{r}
 map(dir(geo_outdir, full.names = T), tools::md5sum) %>% 
   map_dfr(., 
           ~data.frame(file = names(.x), md5 = .x))

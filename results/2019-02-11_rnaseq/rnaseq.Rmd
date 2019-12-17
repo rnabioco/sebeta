@@ -1290,3 +1290,21 @@ imap(gene_lists,
 
 ```
 
+## GEO tables
+
+```{r}
+
+files_for_geo <- c(
+"count_matrix_entpd3.tsv.gz",
+"deseq2_gene_level_entpd3.tsv.gz",
+"count_matrix_d23_d30.tsv.gz",
+"deseq2_gene_level_d23_d30.tsv.gz"
+)
+
+dir.create("GEO")
+
+walk(files_for_geo, 
+    ~file.copy(.x, file.path("GEO", .x)))
+
+
+```
