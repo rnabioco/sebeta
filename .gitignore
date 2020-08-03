@@ -11,3 +11,5 @@
 *.txt
 *.loom
 *.gz
+./results/scrna-seq/cellbrowser/*
+
