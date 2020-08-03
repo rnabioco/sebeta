@@ -1,11 +1,10 @@
 ## scbeta
 
-### Cellbrowser
+### UCSC Cellbrowser
 
-Found at http://amc-sandbox.ucdenver.edu/User33/browser/beta/
+[UCSC cellbrowser](https://sebeta.s3-us-west-2.amazonaws.com/index.html) with eBC, seBC, and datasets from Veres et al Nature. 2019
 
-please email for password and username
+### Data
 
-### GEO record
-
-to do
+Sequencing data to be made public on GEO:
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE142290
