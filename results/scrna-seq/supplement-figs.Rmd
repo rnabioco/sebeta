@@ -1,0 +1,253 @@
+---
+title: "Generate QC Figures"
+author: "Kent Riemondy RBI"
+date: "`R Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir_expt2 <- "~/Projects/10x_data/runs/20180918_russ/results"
+
+fig_dir <- "qc"
+dir.create(fig_dir, showWarnings = FALSE)
+```
+
+## Experiment Summary
+
+Sample | Description
+------------- | ---------------- 
+Russ_GFP_Sort | 2nd experiment
+Russ_d36GFP_Reagg | 2nd experiment
+
+```{r get_data}
+
+samples_expt2 <- c(
+  "Russ_GFP_Sort",
+  "Russ_d36GFP_Reagg")
+
+sample_paths_2 <- file.path(data_dir_expt2,
+                          samples_expt2,
+                          "outs", 
+                          "filtered_gene_bc_matrices", 
+                          "GRCh38_transgenes")
+
+names(sample_paths_2) <- samples_expt2
+
+bcells <- map(sample_paths_2, Seurat::Read10X)
+```
+
+```{r create_seurat, message = F, results = 'hide', warning = F}
+bcells <- map(bcells, ~CreateSeuratObject(.x, 
+                              min.cells = 5,
+                              min.features = 250, 
+                              project = "Russ",
+                              names.field = c(1,2), 
+                              names.delim = "_"))
+```
+
+```{r additional_mdata}
+# add correct sample identifier
+ids <- imap(bcells, 
+            ~data.frame(row.names = rownames(.x@meta.data), 
+                        expt = rep(.y, nrow(.x@meta.data))))
+bcells <- map2(bcells, ids, function(x, y) AddMetaData(x, y, "expt"))
+```
+
+
+## Mitochondrial Reads 
+
+
+```{r QC}
+mito_genes <- map(bcells, 
+                  ~str_subset(rownames(.x@assays$RNA@data), "^MT-"))
+
+proportion_mito <- map2(bcells, mito_genes, 
+                        ~Matrix::colSums(.x@assays$RNA@data[.y, ]) / 
+                          Matrix::colSums(.x@assays$RNA@data))
+
+bcells <- map2(bcells, proportion_mito, 
+               ~AddMetaData(.x, .y, "proportion_mito"))
+
+bcells <- map(bcells, ~{
+  so <- .x
+  so$Total_UMIs <- so$nCount_RNA
+  so$Number_of_genes <- so$nFeature_RNA
+  so$Proportion_mitochondial_UMIs <- so$proportion_mito
+  so
+})
+```
+
+```{r, fig.width = 8, fig.cap = "Shown is the variance explained by each QC metric computed against each gene. Note that the proportion of mitochondrial UMIs contribute less to the variance than # of UMIs or #s of genes. The # of genes and UMIs vary between cell states so are expected to explain higher levels of variance."}
+library(scater)
+library(SingleCellExperiment)
+sces <- map(bcells, as.SingleCellExperiment)
+
+sces <-  map(sces, logNormCounts)
+vars <- map(sces, ~getVarianceExplained(.x, 
+    variables=c("Total_UMIs", 
+                "Number_of_genes", 
+                "Proportion_mitochondial_UMIs")))
+
+p1 <- plotExplanatoryVariables(vars[[1]]) + labs(title = "seBC")
+p2 <- plotExplanatoryVariables(vars[[2]]) + labs(title = "eBC")
+p <- cowplot::plot_grid(p1, p2)
+
+save_plot(file.path(fig_dir, "percent_variance_explained_scater.pdf"), 
+          p,
+          nrow = 1,
+          ncol = 2,
+          base_asp = 1.5)
+```
+
+```{r}
+plot_violin <- function(df, .x, .y,
+                        .fill = NULL,
+                        .size = 0.50,
+                        .width = 1,
+                        .scale = "width",
+                        .alpha = 1,
+                        cols = ggplot2::scale_fill_viridis_d(),
+                        single_col = NULL,
+                        jitter = F,
+                        rotate_x_text = TRUE,
+                        arrange_by_fill = TRUE){
+
+  if (arrange_by_fill && !is.null(.fill)){
+    tmp <- sym(.fill)
+    df <- arrange(df, !!tmp)
+    df[[.x]] <- factor(df[[.x]], levels = unique(df[[.x]]))
+  }
+
+  p <- ggplot(df, aes_string(x = .x, y = .y))
+
+  if (jitter){
+    p <- p  + geom_jitter(size = 0.1, alpha = 0.2, color = "black")
+  }
+
+  if (!is.null(single_col)){
+    p <- p +
+      geom_violin(size = .size,
+                  scale = .scale,
+                  fill = single_col,
+                  alpha = .alpha)
+  } else {
+    p <- p +
+      geom_violin(aes_string(fill = .fill),
+                  size = .size,
+                  scale = .scale,
+                  alpha = .alpha) +
+      cols
+  }
+
+  if(rotate_x_text){
+    p <- p + theme(axis.text.x = element_text(angle = 90,
+                                              hjust = 1,
+                                              vjust = 0.5))
+  }
+  p <- p + theme(legend.title = element_blank())
+  p
+}
+```
+
+```{r}
+
+mdata <- map(bcells, ~.x@meta.data) %>%
+  setNames(c("seBC", "eBC")) %>% 
+  bind_rows(, .id = "sample") %>% 
+  mutate(sample = factor(sample, levels = c("seBC", "eBC")))
+      
+      
+p_mito <- plot_violin(mdata, 
+                  "sample",
+            "proportion_mito", 
+            .fill = "sample", 
+            cols = scale_fill_manual(values = palette_OkabeIto)) +
+  labs(x = "", y = "Proportion Mitochondrial UMIs") + 
+ geom_hline(aes(yintercept = 0.20), 
+            linetype = "dashed") +
+  theme(legend.position = "none")
+p_mito
+```
+
+```{r}
+p_umi <- plot_violin(mdata, 
+                  "sample",
+            "nCount_RNA", 
+            .fill = "sample", 
+            cols = scale_fill_manual(values = palette_OkabeIto)) +
+  labs(x = "", y = "# of UMIs") + 
+  scale_y_log10(labels = scales::comma) + 
+ geom_hline(aes(yintercept = 75000), 
+            linetype = "dashed") +
+  theme(legend.position = "none")
+p_umi
+```
+
+
+```{r}
+p_gene <- plot_violin(mdata, 
+                  "sample",
+            "nFeature_RNA", 
+            .fill = "sample", 
+            cols = scale_fill_manual(values = palette_OkabeIto)) +
+  labs(x = "", y = "# of genes") + 
+  scale_y_log10(labels = scales::comma) + 
+  theme(legend.position = "none")
+p_gene
+```
+
+
+```{r}
+p_mito_v_umi <- ggplot(mdata, 
+                  aes(nCount_RNA, proportion_mito)) +
+  geom_point(aes(color = sample), size = 0.1) +
+  geom_density_2d(color = "black") + 
+  facet_wrap(~sample, scales = "free") +
+  scale_color_manual(values = palette_OkabeIto) +
+  scale_x_continuous(labels = scales::comma) + 
+ geom_hline(aes(yintercept = 0.20), linetype = "dashed") +
+ geom_vline(aes(xintercept = 75000), linetype = "dashed") +
+  labs(x = "# of UMIs", 
+       y = "Propotion Mitochondial UMIs") + 
+  theme(legend.position = "none")
+p_mito_v_umi
+```
+
+
+```{r}
+p1 <- plot_grid(p_umi,
+          p_gene,
+          p_mito, labels = c("A", "B", "C"),
+          nrow = 1,
+          scale = 0.90)
+
+p2 <- plot_grid(p1, p_mito_v_umi, nrow = 2, 
+                labels = c("", "D"), 
+          scale = c(1, 0.95))
+p2
+
+save_plot(file.path(fig_dir, "qc_metrics.pdf"),
+          p2, 
+          base_asp = 1.2,
+          nrow = 2,
+          ncol = 2)
+```
+
+
+
