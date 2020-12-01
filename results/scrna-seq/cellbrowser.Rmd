@@ -17,11 +17,11 @@ Format seurat object into a cellbrowser directory suitable for html browser.
 source("../../R/globals.R")
 library(tidyverse)
 expts <- c("Sorted", "Reaggregated")
-
+ids <- c("seBCs", "eBCs")
 bcells <- map(expts, 
      ~readRDS(paste0(., "_final.rds")))
 
-names(bcells) <- expts
+names(bcells) <- ids
 
 ```
 
@@ -61,9 +61,9 @@ outdir <- "cellbrowser"
 dir.create(outdir, showWarnings = FALSE)
 
 # write out rds files with names listed in sobjs
-iwalk(bcells, ~saveRDS(.x, 
-                   file.path(outdir, 
-                                 paste0(.y, ".rds"))))
+# iwalk(bcells, ~saveRDS(.x, 
+#                    file.path(outdir, 
+#                                  paste0(.y, ".rds"))))
 ```
 
 ## Set colors
@@ -127,16 +127,16 @@ col_maps <- map2(col_maps, list(sorted_colmap, reagg_colmap),
   res
 })
 
-
+walk(file.path("cellbrowser", ids), dir.create, recursive = TRUE)
 imap(col_maps, 
     ~map_dfr(.x, ~tibble(clusterName = str_replace(names(.x), ",", ""), 
                   color = .x)) %>% as.data.frame() %>% 
-  write_csv(paste0(.y, "_colorMap.csv"), col_names = F, quote_escape = "none"))
+  write_csv(file.path(outdir, .y, paste0(.y, "_colorMap.csv")), col_names = F, quote_escape = "none"))
 
 imap(col_maps, 
     ~map_dfr(.x, ~tibble(clusterName = names(.x), 
                   color = .x)) %>% as.data.frame() %>% 
-  write_tsv(paste0(.y, "_colorMap_with_commas.tsv"), col_names = F, quote_escape = "none"))
+  write_tsv(file.path(outdir, .y, paste0(.y, "_colorMap_with_commas.tsv")), col_names = F, quote_escape = "none"))
 ```
 
 
@@ -145,24 +145,25 @@ Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ htt
 ```{r}
 dir.create("cellbrowser/markers", recursive = TRUE)
 
-pwalk(list(bcells, names(bcells), c("seBCs", "eBCs")), function(x, id, type) {
+pwalk(list(bcells, expts, c("seBCs", "eBCs")), function(x, id, type) {
   cols <- colnames(x@meta.data)
   names(cols) <- colnames(x@meta.data)
 
-  mkrs <- read_tsv(paste0("../2018-12-19_figs/marker_tables/",
+  mkrs <- read_tsv(paste0("marker_tables/",
                           id, 
                           "_markers_cell_type.txt")) %>% 
-  select(cluster, gene, p_val_adj, everything())
+  select(cluster, gene, p_val_adj, everything()) %>% 
+    mutate(cluster = str_remove(cluster, ","))
 
   write_tsv(mkrs, paste0("cellbrowser/markers/", 
-                         id, "_markers.tsv"))
+                         type, "_markers.tsv"))
 
   do.call(function(...) {ExportToCellbrowser(x, 
-                    dir = file.path("cellbrowser", id),
+                    dir = file.path("cellbrowser", type),
                     dataset.name = type,
                     reductions = c("tsne", "ptime"),
                     markers.file = paste0("cellbrowser/markers/", 
-                                          id, 
+                                          type, 
                                           "_markers.tsv"),
                     cluster.field = "cell_types",
                     ...)}, 
@@ -175,9 +176,9 @@ pwalk(list(bcells, names(bcells), c("seBCs", "eBCs")), function(x, id, type) {
 ```{bash}
 cd cellbrowser
 
-echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_figs/Sorted_colorMap.csv"' >> Sorted/cellbrowser.conf
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/sebeta/results/scrna-seq/cellbrowser/seBCs/seBCs_colorMap.csv"' >> seBCs/cellbrowser.conf
 
-echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_figs/Reaggregated_colorMap.csv"' >> Reaggregated/cellbrowser.conf
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/sebeta/results/scrna-seq/cellbrowser/eBCs/eBCs_colorMap.csv"' >> eBCs/cellbrowser.conf
 ```
 
 
@@ -185,10 +186,8 @@ echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/sebeta/results/2018-12-19_fig
 cd cellbrowser
 
 /miniconda3/bin/cbBuild \
--i Sorted/cellbrowser.conf \
--i Reaggregated/cellbrowser.conf \
--i ../../2019-05-23_public_data/cellbrowser/stage5/cellbrowser.conf \
--i ../../2019-05-23_public_data/cellbrowser/stage6/cellbrowser.conf \
+-i seBCs/cellbrowser.conf \
+-i eBCs/cellbrowser.conf \
 -o beta
 
 ```
